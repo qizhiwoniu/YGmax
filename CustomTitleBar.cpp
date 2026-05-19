@@ -20,7 +20,28 @@ CustomTitleBar::CustomTitleBar(QWidget* parent)
     m_menuBar = new QMenuBar(this);
     m_menuBar->setMaximumHeight(24);          // ← 限制高度贴近文字
     m_menuBar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    
+    // --- 设置箭头按钮 ---
+    m_settingsBtn = new QPushButton("▲", this);
+    m_settingsBtn->setFixedSize(46, 32);
+    m_settingsBtn->setFlat(true);
+    m_settingsBtn->setObjectName("settingsBtn");
+    m_settingsBtn->setToolTip(tr("设置"));
 
+    // --- 设置菜单 ---
+    m_settingsMenu = new QMenu(this);
+    m_settingsMenu->addAction(tr("主题"));
+    m_settingsMenu->addAction(tr("语言"));
+    m_settingsMenu->addSeparator();
+    m_settingsMenu->addAction(tr("偏好设置"));
+
+    connect(m_settingsBtn, &QPushButton::clicked, this, [this]() {
+        // 菜单弹出位置在按钮正下方
+        QPoint pos = m_settingsBtn->mapToGlobal(
+            QPoint(0, m_settingsBtn->height())
+        );
+        m_settingsMenu->exec(pos);
+        });
     // --- 窗口按钮 ---
     m_minBtn = new QPushButton("─", this);
     m_maxBtn = new QPushButton("□", this);
@@ -43,6 +64,7 @@ CustomTitleBar::CustomTitleBar(QWidget* parent)
     //layout->addWidget(m_titleLabel);
     layout->addWidget(m_menuBar);
     layout->addStretch();
+    layout->addWidget(m_settingsBtn);  // ← 最小化左边
     layout->addWidget(m_minBtn);
     layout->addWidget(m_maxBtn);
     layout->addWidget(m_closeBtn);
@@ -144,6 +166,21 @@ void CustomTitleBar::applyStyle()
             background: #3f3f46;
             margin: 3px 6px;
         }
+        /* 菜单按钮 —— VS 风格：hover 深灰 */
+        QPushButton#settingsBtn {
+            color: #cccccc;
+            background: transparent;
+            border: none;
+            font-size: 14px;
+            font-family: "Segoe MDL2 Assets", "Segoe UI Symbol";
+        }
+        QPushButton#settingsBtn:hover {
+            background: #3f3f46;
+            color: #ffffff;
+        }
+        QPushButton#settingsBtn:pressed {
+            background: #555558;
+        }
         /* 最小化、最大化 —— VS 风格：hover 深灰 */
         QPushButton#minBtn, QPushButton#maxBtn {
             color: #cccccc;
@@ -165,7 +202,8 @@ void CustomTitleBar::applyStyle()
             color: #cccccc;
             background: transparent;
             border: none;
-            font-size: 13px;
+            font-size: 14px;
+            font-family: "Segoe MDL2 Assets", "Segoe UI Symbol";
         }
         QPushButton#closeBtn:hover {
             background: #c42b1c;

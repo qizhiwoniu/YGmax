@@ -102,10 +102,19 @@
     </QtMoc>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <QtMoc Include="AboutDialog.h" />
+    <QtMoc Include="SystemTrayIcon.h" />
+    <QtMoc Include="ToolBar.h" />
+    <QtMoc Include="DocumentTabBar.h" />
+    <ClInclude Include="version.h" />
     <QtRcc Include="YGmax.qrc" />
     <QtUic Include="YGmax.ui" />
     <QtMoc Include="YGmax.h" />
+    <ClCompile Include="AboutDialog.cpp" />
     <ClCompile Include="CustomTitleBar.cpp" />
+    <ClCompile Include="DocumentTabBar.cpp" />
+    <ClCompile Include="SystemTrayIcon.cpp" />
+    <ClCompile Include="ToolBar.cpp" />
     <ClCompile Include="YGmax.cpp" />
     <ClCompile Include="main.cpp" />
     <None Include="YGmax.ico" />
@@ -116,6 +125,10 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="ico\Select.ico" />
+    <Image Include="ico\Select.png" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">

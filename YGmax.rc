@@ -1,1 +1,37 @@
+#include "windows.h"
+#include "version.h"
+
 IDI_ICON1		ICON		DISCARDABLE	"YGmax.ico"
+
+/////////////////////////////////////////////////////////////////////////////
+// 版本信息
+//
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION    VERSION_COMMA
+ PRODUCTVERSION VERSION_COMMA
+ FILEFLAGSMASK  0x3fL
+ FILEFLAGS      0x0L
+ FILEOS         VOS__WINDOWS32
+ FILETYPE       VFT_APP
+ FILESUBTYPE    VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404B0"
+        BEGIN
+            VALUE "CompanyName",      VER_COMPANY_NAME
+            VALUE "FileDescription",  VER_FILE_DESC
+            VALUE "FileVersion",      VERSION_STR
+            VALUE "InternalName",     VER_ORIGINAL_NAME
+            VALUE "LegalCopyright",   VER_COPYRIGHT
+            VALUE "OriginalFilename", VER_ORIGINAL_NAME
+            VALUE "ProductName",      VER_PRODUCT_NAME
+            VALUE "ProductVersion",   VERSION_STR
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0804, 0x04B0
+    END
+END
+

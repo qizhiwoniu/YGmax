@@ -1,5 +1,7 @@
 <RCC>
     <qresource prefix="/YGmax">
         <file>YGmax.ico</file>
+        <file>ico/Select.png</file>
+        <file>ico/Select.ico</file>
     </qresource>
 </RCC>
