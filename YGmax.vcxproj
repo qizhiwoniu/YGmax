@@ -107,8 +107,8 @@
     <QtMoc Include="SystemTrayIcon.h" />
     <QtMoc Include="ToolBar.h" />
     <QtMoc Include="DocumentTabBar.h" />
-    <QtMoc Include="BottomPanel.h" />
     <QtMoc Include="RightPanel.h" />
+    <QtMoc Include="BottomPanel.h" />
     <ClInclude Include="version.h" />
     <QtRcc Include="YGmax.qrc" />
     <QtUic Include="YGmax.ui" />

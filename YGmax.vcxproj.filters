@@ -76,13 +76,13 @@
     <ClCompile Include="DocumentTabBar.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="BottomPanel.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="RightPanel.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Viewport3D.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="BottomPanel.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -102,13 +102,13 @@
     <QtMoc Include="DocumentTabBar.h">
       <Filter>Header Files</Filter>
     </QtMoc>
-    <QtMoc Include="BottomPanel.h">
-      <Filter>Header Files</Filter>
-    </QtMoc>
     <QtMoc Include="RightPanel.h">
       <Filter>Header Files</Filter>
     </QtMoc>
     <QtMoc Include="Viewport3D.h">
+      <Filter>Header Files</Filter>
+    </QtMoc>
+    <QtMoc Include="BottomPanel.h">
       <Filter>Header Files</Filter>
     </QtMoc>
   </ItemGroup>

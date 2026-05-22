@@ -20,6 +20,13 @@
 #include <QFileIconProvider>
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QMenu>
+#include <QAction>
+#include <QInputDialog>
+#include <QMessageBox>
+#include <QClipboard>
+#include <QApplication>
+#include <QPoint>
 
 class AssetBrowserPanel : public QWidget
 {
@@ -27,13 +34,28 @@ class AssetBrowserPanel : public QWidget
 public:
     explicit AssetBrowserPanel(QWidget* parent = nullptr);
 
+    // 在外部 connect(logMessage) 之后调用，补发初始化日志
+    void initLog();
+
 signals:
     void assetSelected(const QString& path);
+    // level: 0=info  1=warn  2=error
+    void logMessage(const QString& msg, int level = 0);
 
 private slots:
     void onFolderSelected(QTreeWidgetItem* cur, QTreeWidgetItem* prev);
     void onSearchChanged(const QString& text);
     void onFileClicked(QTableWidgetItem* item);
+    void onFileDoubleClicked(QTableWidgetItem* item);
+    void onFileListContextMenu(const QPoint& pos);
+    void onFolderTreeContextMenu(const QPoint& pos);
+
+    void fileRename();
+    void fileCopy();
+    void fileCut();
+    void filePaste();
+    void fileDelete();
+    void fileNewFolder();
 
 private:
     void applyStyle();
@@ -59,7 +81,14 @@ private:
     QLineEdit*    m_searchBar  = nullptr;
     QLabel*       m_pathLabel  = nullptr;
 
-    QString       m_currentDir;  // 当前显示的目录路径
+    QString       m_currentDir;       // 当前显示的目录路径
+
+    // 剪贴板状态（内部）
+    QString       m_clipboardPath;    // 被复制/剪切的文件路径
+    bool          m_clipboardIsCut = false;  // true=剪切，false=复制
+
+    // 刷新目录树中某个节点
+    void refreshTreeNode(const QString& dirPath);
 };
 
 // ─────────────────────────────────────────────────────────────
