@@ -437,6 +437,11 @@ bool YGmax::eventFilter(QObject* watched, QEvent* event)
 {
     Q_UNUSED(watched)
 
+    // 窗口隐藏时（最小化到托盘）不拦截任何事件
+    // 否则 hide() 后 width()/height() 为 0，hitTest 误判所有鼠标为边缘
+    if (!isVisible())
+        return false;
+
     // 只处理鼠标事件
     if (event->type() != QEvent::MouseMove       &&
         event->type() != QEvent::MouseButtonPress &&
@@ -513,6 +518,7 @@ YGmax::ResizeDir YGmax::hitTest(const QPoint& pos) const
 {
     const int x = pos.x(), y = pos.y();
     const int w = width(),  h = height();
+    if (w == 0 || h == 0) return None;   // 窗口隐藏时尺寸为 0，直接返回
     int dir = None;
     if (x <= kEdge)       dir |= Left;
     if (x >= w - kEdge)   dir |= Right;

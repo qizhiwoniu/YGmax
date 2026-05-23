@@ -2,6 +2,8 @@
 #include "BottomPanel.h"
 #include <QHeaderView>
 #include <QScrollBar>
+#include <QTimer>
+#include <QMouseEvent>
 #include <QDateTime>
 #include <QTime>
 #include <QDir>
@@ -156,7 +158,8 @@ void AssetBrowserPanel::setupFolderTree()
     m_folderTree->setRootIsDecorated(true);   // 显示展开/折叠箭头
     m_folderTree->setAnimated(true);
     m_folderTree->setIconSize(QSize(16, 16));
-    m_folderTree->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_folderTree->setContextMenuPolicy(Qt::NoContextMenu);
+    m_folderTree->viewport()->installEventFilter(this);
 
     // 系统图标提供器
     QFileIconProvider iconProvider;
@@ -178,8 +181,6 @@ void AssetBrowserPanel::setupFolderTree()
 
     connect(m_folderTree, &QTreeWidget::currentItemChanged,
             this, &AssetBrowserPanel::onFolderSelected);
-    connect(m_folderTree, &QTreeWidget::customContextMenuRequested,
-            this, &AssetBrowserPanel::onFolderTreeContextMenu);
 }
 
 // 递归构建目录树
@@ -205,6 +206,22 @@ QTreeWidgetItem* AssetBrowserPanel::buildTreeNode(
     return node;
 }
 
+// ── eventFilter：右键按下立即弹菜单，不依赖 customContextMenuRequested ──
+bool AssetBrowserPanel::eventFilter(QObject* obj, QEvent* event)
+{
+    if (event->type() == QEvent::MouseButtonPress) {
+        auto* me = static_cast<QMouseEvent*>(event);
+        if (me->button() == Qt::RightButton) {
+            if (obj == m_folderTree->viewport())
+                onFolderTreeContextMenu(me->pos());
+            else if (obj == m_fileList->viewport())
+                onFileListContextMenu(me->pos());
+            return true;
+        }
+    }
+    return QWidget::eventFilter(obj, event);
+}
+
 // ── 构建右侧文件表格 ──────────────────────────────────────────
 void AssetBrowserPanel::setupFileList()
 {
@@ -227,14 +244,13 @@ void AssetBrowserPanel::setupFileList()
     m_fileList->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_fileList->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_fileList->setAlternatingRowColors(false);
-    m_fileList->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_fileList->setContextMenuPolicy(Qt::NoContextMenu);
+    m_fileList->viewport()->installEventFilter(this);
 
     connect(m_fileList, &QTableWidget::itemClicked,
             this, &AssetBrowserPanel::onFileClicked);
     connect(m_fileList, &QTableWidget::itemDoubleClicked,
             this, &AssetBrowserPanel::onFileDoubleClicked);
-    connect(m_fileList, &QTableWidget::customContextMenuRequested,
-            this, &AssetBrowserPanel::onFileListContextMenu);
 }
 
 // ── 填充右侧文件列表 ──────────────────────────────────────────
@@ -529,7 +545,7 @@ void AssetBrowserPanel::onFolderTreeContextMenu(const QPoint& pos)
             QLineEdit::Normal, tr("新建文件夹"), &ok);
         if (!ok || name.isEmpty()) return;
         QString newPath = dirPath + "/" + name;
-        if (QDir().mkdir(newPath)) {
+        if (QDir(dirPath).mkdir(name)) {
             QFileIconProvider iconProvider;
             auto* child = new QTreeWidgetItem(item, { name });
             child->setData(0, Qt::UserRole, newPath);
@@ -740,7 +756,7 @@ void AssetBrowserPanel::fileNewFolder()
         QLineEdit::Normal, tr("新建文件夹"), &ok);
     if (!ok || name.isEmpty()) return;
     QString newPath = m_currentDir + "/" + name;
-    if (QDir().mkdir(newPath)) {
+    if (QDir(m_currentDir).mkdir(name)) {
         populateFileList(m_currentDir, m_searchBar->text());
         refreshTreeNode(m_currentDir);
         emit logMessage(tr("[AssetBrowser] 新建文件夹: %1").arg(newPath), 0);
@@ -931,26 +947,21 @@ void LogConsolePanel::appendMessage(const QString& msg, int level)
     static const char* colors[] = { "#cccccc", "#e8b930", "#f44747" };
     const char* color = (level >= 0 && level <= 2) ? colors[level] : colors[0];
 
-    // 加时间戳
     QString timestamp = QTime::currentTime().toString("HH:mm:ss");
 
-    // 移到末尾再插入，避免覆盖光标位置
-    QTextCursor cursor = m_output->textCursor();
+    QTextCursor cursor(m_output->document());
     cursor.movePosition(QTextCursor::End);
-    m_output->setTextCursor(cursor);
-
-    // insertHtml 才能真正渲染颜色
-    m_output->insertHtml(
+    if (!m_output->document()->isEmpty())
+        cursor.insertBlock();
+    cursor.insertHtml(
         QString("<span style='color:#555555;font-size:11px;'>%1</span>"
-                "&nbsp;"
-                "<span style='color:%2;font-size:12px;'>%3</span><br>")
+                "&nbsp;<span style='color:%2;font-size:12px;'>%3</span>")
             .arg(timestamp, color, msg.toHtmlEscaped())
     );
-    m_output->ensureCursorVisible();
-    m_output->repaint();
-    // 自动滚到底部
-    //auto* sb = m_output->verticalScrollBar();
-    //sb->setValue(sb->maximum());
+
+    // 把 view cursor 也移到末尾——控件隐藏时也有效
+    // 等控件显示后 ensureCursorVisible 会正确滚动
+    m_output->moveCursor(QTextCursor::End);
 }
 
 void LogConsolePanel::clear()
@@ -1110,6 +1121,13 @@ BottomPanel::BottomPanel(QWidget* parent)
 
     connect(m_tabBar, &QTabBar::currentChanged,
             m_stack, &QStackedWidget::setCurrentIndex);
+
+    connect(m_tabBar, &QTabBar::currentChanged, this, [this](int idx) {
+        if (idx == 1)   // Log Console tab
+            QTimer::singleShot(0, this, [this]() {
+                m_logConsole->findChild<QTextEdit*>()->ensureCursorVisible();
+            });
+    });
 
     auto* leftWidget = new QWidget(this);
     auto* leftVlay   = new QVBoxLayout(leftWidget);

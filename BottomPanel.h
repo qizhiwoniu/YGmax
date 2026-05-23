@@ -57,6 +57,9 @@ private slots:
     void fileDelete();
     void fileNewFolder();
 
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override;
+
 private:
     void applyStyle();
     void setupFolderTree();
