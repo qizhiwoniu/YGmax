@@ -12,7 +12,6 @@
 #include <QSettings>
 #include <QMouseEvent>
 #include <QCursor>
-#include "ui_YGmax.h"
 #include "ToolBar.h"
 #include "CustomTitleBar.h"
 #include "SystemTrayIcon.h"

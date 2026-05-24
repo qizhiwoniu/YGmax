@@ -111,7 +111,6 @@
     <QtMoc Include="BottomPanel.h" />
     <ClInclude Include="version.h" />
     <QtRcc Include="YGmax.qrc" />
-    <QtUic Include="YGmax.ui" />
     <QtMoc Include="YGmax.h" />
     <ClCompile Include="AboutDialog.cpp" />
     <ClCompile Include="BottomPanel.cpp" />

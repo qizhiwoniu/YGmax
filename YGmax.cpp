@@ -243,14 +243,14 @@ void YGmax::applyDockStyle()
 
 void YGmax::saveLayout()
 {
-    QSettings s("YGmax", "Layout");
+    QSettings s("Qizhiwoniu", "YGmax");
     s.setValue("geometry",  saveGeometry());
     s.setValue("dockState", m_dockHost->saveState());
 }
 
 void YGmax::restoreLayout()
 {
-    QSettings s("YGmax", "Layout");
+    QSettings s("Qizhiwoniu", "YGmax");
     if (s.contains("geometry"))
         restoreGeometry(s.value("geometry").toByteArray());
     if (s.contains("dockState"))
@@ -260,7 +260,15 @@ void YGmax::restoreLayout()
 void YGmax::closeEvent(QCloseEvent* event)
 {
     saveLayout();
-    event->accept();
+    event->ignore();
+    hide();
+    m_tray->showMessage(
+        VER_PRODUCT_NAME,
+        tr("程序已最小化到托盘，双击图标可重新打开"),
+        QSystemTrayIcon::Information,
+        2000
+    );
+
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -268,61 +276,67 @@ void YGmax::closeEvent(QCloseEvent* event)
 // ─────────────────────────────────────────────────────────────
 void YGmax::setupMenuBar()
 {
-    QMenuBar* mb = new QMenuBar(m_titleBar);
-    mb->setStyleSheet(R"(
-        QMenuBar {
-            background: transparent; color: #cccccc; font-size: 12px;
-        }
-        QMenuBar::item { padding: 4px 10px; background: transparent; }
-        QMenuBar::item:selected { background: #3f3f46; border-radius: 3px; }
-        QMenu {
-            background: #2a2a2e; color: #d0d0d0;
-            border: 1px solid #444; font-size: 12px;
-        }
-        QMenu::item { padding: 5px 20px 5px 12px; }
-        QMenu::item:selected { background: #0e639c; }
-        QMenu::separator { height: 1px; background: #444; margin: 3px 0; }
-    )");
+    QMenuBar* mb = m_titleBar->menuBar();
 
     // 文件
     QMenu* fileMenu = mb->addMenu(tr("文件(&F)"));
-    m_newDocAct = new QAction(tr("新建文档"), this);
+    m_newDocAct = new QAction(tr("新建"), this);
     m_newDocAct->setShortcut(QKeySequence::New);
-    connect(m_newDocAct, &QAction::triggered, this, [this] {
-        m_tabBar->addTab(tr("未命名文档"));
+    connect(m_newDocAct, &QAction::triggered, this, [this]() {
+        static int n = 1;
+        m_tabBar->setFixedHeight(34);
+        m_tabBar->addTab(tr("未命名文档%1").arg(n == 1 ? "" : QString(" %1").arg(n)));
+        n++;
+        m_tabBar->show();
         m_viewport->setVisible(true);
-        if (m_tabBar->height() == 0) m_tabBar->setFixedHeight(-1);
-    });
+        });
     fileMenu->addAction(m_newDocAct);
+
+    QAction* openAct = new QAction(tr("打开"), this);
+    openAct->setShortcut(QKeySequence::Open);
+    fileMenu->addAction(openAct);
+
     fileMenu->addSeparator();
 
-    QAction* exitAct = new QAction(tr("退出"), this);
-    connect(exitAct, &QAction::triggered, this, &QWidget::close);
-    fileMenu->addAction(exitAct);
+    QAction* quitAct = new QAction(tr("退出"), this);
+    quitAct->setShortcut(QKeySequence::Quit);
+    connect(quitAct, &QAction::triggered, this, &QWidget::close);
+    fileMenu->addAction(quitAct);
 
-    // 视图
+    // 编辑
+    QMenu* editMenu = mb->addMenu(tr("编辑(&E)"));
+    QAction* undoAct = new QAction(tr("撤销"), this);
+    undoAct->setShortcut(QKeySequence::Undo);
+    editMenu->addAction(undoAct);
+
+    // 视图：快速显示/隐藏各面板
+    // 注意：setupMenuBar() 在 setupDockHost() 之前调用，各 m_dock* 此时仍为
+    // nullptr。lambda 必须通过 this 成员指针在触发时才解引用，不能直接捕获。
     QMenu* viewMenu = mb->addMenu(tr("视图(&V)"));
-    auto makeViewAct = [&](const QString& title, QDockWidget* YGmax::*member) {
-        auto* act = new QAction(title, this);
+
+    // 用成员指针偏移量做延迟绑定：触发时再取实际 dock 指针
+    auto makeViewAct = [&](const QString& label, QDockWidget* YGmax::* member) {
+        QAction* act = new QAction(label, this);
         act->setCheckable(true);
         act->setChecked(true);
-        connect(act, &QAction::toggled, this, [this, member](bool checked) {
+        connect(act, &QAction::toggled, this, [this, member](bool v) {
             if (QDockWidget* dock = this->*member)
-                dock->setVisible(checked);
-        });
+                dock->setVisible(v);
+            });
+        // 打开菜单时同步勾选状态（面板可能被用户手动关闭过）
         connect(viewMenu, &QMenu::aboutToShow, this, [this, act, member]() {
             if (QDockWidget* dock = this->*member)
                 act->setChecked(dock->isVisible());
-        });
+            });
         viewMenu->addAction(act);
-    };
+        };
 
-    makeViewAct(tr("Asset Browser"),   &YGmax::m_dockAsset);
-    makeViewAct(tr("Log Console"),     &YGmax::m_dockLog);
-    makeViewAct(tr("Asset Preview"),   &YGmax::m_dockPreview);
+    makeViewAct(tr("Asset Browser"), &YGmax::m_dockAsset);
+    makeViewAct(tr("Log Console"), &YGmax::m_dockLog);
+    makeViewAct(tr("Asset Preview"), &YGmax::m_dockPreview);
     viewMenu->addSeparator();
-    makeViewAct(tr("Explorer"),        &YGmax::m_dockExplorer);
-    makeViewAct(tr("Create"),          &YGmax::m_dockCreate);
+    makeViewAct(tr("Explorer"), &YGmax::m_dockExplorer);
+    makeViewAct(tr("Create"), &YGmax::m_dockCreate);
     makeViewAct(tr("Property Editor"), &YGmax::m_dockProperty);
 
     // 帮助
@@ -331,7 +345,7 @@ void YGmax::setupMenuBar()
     connect(aboutAct, &QAction::triggered, this, [this]() {
         AboutDialog dlg(this);
         dlg.exec();
-    });
+        });
     helpMenu->addAction(aboutAct);
 }
 
@@ -340,9 +354,25 @@ void YGmax::setupMenuBar()
 // ─────────────────────────────────────────────────────────────
 void YGmax::setupTray()
 {
-    m_tray = new SystemTrayIcon(this);
-}
+    m_tray = new SystemTrayIcon(this, this);
 
+    connect(m_tray, &SystemTrayIcon::showMainWindow, this, [this]() {
+        showNormal();
+        activateWindow();
+        raise();
+        });
+
+    connect(m_tray, &SystemTrayIcon::checkUpdate, this, [this]() {
+        m_tray->showMessage(
+            QString(VER_PRODUCT_NAME),
+            tr("当前已是最新版本  v%1").arg(VERSION_STR),
+            QSystemTrayIcon::Information,
+            3000
+        );
+        });
+
+    m_tray->show();
+}
 // ─────────────────────────────────────────────────────────────
 //  圆角绘制
 // ─────────────────────────────────────────────────────────────
