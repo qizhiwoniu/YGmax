@@ -25,7 +25,7 @@ private:
     QPushButton* m_defaultBtn = nullptr;
     QButtonGroup* m_modeGroup = nullptr;
 
-    QPushButton* addIconBtn(const QString& icon, const QString& tooltip, int id);
+    QPushButton* addIconBtn(const QString& icon, const QString& tooltip, int id, bool tintOnActive);
     QFrame* addSeparator();
     void         applyStyle();
 };

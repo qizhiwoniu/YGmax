@@ -51,25 +51,57 @@ ToolBar::ToolBar(QWidget* parent)
     layout->addWidget(addSeparator());
 
     // ── 图标按钮（按需增减）──────────────────────────────
-    layout->addWidget(addIconBtn("📂", tr("打开"), 1));
-    layout->addWidget(addIconBtn("💾", tr("保存"), 2));
+    layout->addWidget(addIconBtn(":/YGmax/ico/play96x96.png", tr("运行"), 3, false));
+    layout->addWidget(addIconBtn(":/YGmax/ico/start96x96.png", tr("开始"), 4, false));
     layout->addWidget(addSeparator());
-    layout->addWidget(addIconBtn("↩", tr("撤销"), 3));
-    layout->addWidget(addIconBtn("↪", tr("重做"), 4));
-
+    layout->addWidget(addIconBtn(":/YGmax/ico/f96x96.png", tr("功能"), 5, false));
     layout->addStretch();
+    // ── 图标按钮（按需增减）────────────────────────────── 
+    layout->addWidget(addIconBtn("💾", tr("保存"), 8, false));
+    layout->addWidget(addSeparator());
+    layout->addWidget(addIconBtn("↩", tr("撤销"), 9, false));
+    layout->addWidget(addIconBtn("↪", tr("重做"), 10, false));
+
     setLayout(layout);
+    
 
     applyStyle();
 }
-
-QPushButton* ToolBar::addIconBtn(const QString& icon, const QString& tooltip, int id)
+QPushButton* ToolBar::addIconBtn(const QString& icon, const QString& tooltip, int id, bool tintOnActive)
 {
-    auto* btn = new QPushButton(icon, this);
+    bool isPixmap = icon.startsWith(":/");
+
+    auto* btn = new QPushButton(isPixmap ? QString() : icon, this);
     btn->setFixedSize(44, 44);
     btn->setFlat(true);
     btn->setObjectName("iconBtn");
     btn->setToolTip(tooltip);
+
+    if (isPixmap) {
+        QPixmap basePix(icon);
+        if (!basePix.isNull()) {
+            QIcon qicon;
+            qicon.addPixmap(basePix, QIcon::Normal, QIcon::Off);
+            if (tintOnActive) {
+                // 激活态染蓝
+                QPixmap bluePix(basePix.size());
+                bluePix.fill(Qt::transparent);
+                QPainter p(&bluePix);
+                p.drawPixmap(0, 0, basePix);
+                p.setCompositionMode(QPainter::CompositionMode_SourceIn);
+                p.fillRect(bluePix.rect(), QColor("#0078d4"));
+                p.end();
+                qicon.addPixmap(bluePix, QIcon::Active, QIcon::Off);
+            }
+            else {
+                // 不染蓝：激活态与普通态相同
+                qicon.addPixmap(basePix, QIcon::Active, QIcon::Off);
+            }
+            btn->setIcon(qicon);
+            btn->setIconSize(QSize(28, 28));
+        }
+    }
+
     connect(btn, &QPushButton::clicked, this, [this, id]() {
         emit actionTriggered(id);
         });

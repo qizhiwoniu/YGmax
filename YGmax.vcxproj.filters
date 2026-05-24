@@ -117,5 +117,14 @@
     <Image Include="ico\Select.png">
       <Filter>ico</Filter>
     </Image>
+    <Image Include="ico\f96x96.png">
+      <Filter>ico</Filter>
+    </Image>
+    <Image Include="ico\play96x96.png">
+      <Filter>ico</Filter>
+    </Image>
+    <Image Include="ico\start96x96.png">
+      <Filter>ico</Filter>
+    </Image>
   </ItemGroup>
 </Project>
