@@ -8,6 +8,7 @@
 struct DocTab {
     QString   title;
     bool      modified = false;   // 是否有未保存修改（显示 •）
+    int       kind     = 0;       // 0=3D视口  1=文本编辑器
     QPushButton* btn = nullptr;
 };
 
@@ -21,6 +22,8 @@ public:
     void removeTab(int index);
     void setCurrentTab(int index);
     void setTabModified(int index, bool modified);
+    void setTabData(int index, int kind);    // 存 kind
+    int  tabData(int index) const;           // 读 kind
     int  currentIndex() const { return m_current; }
     int  count()        const { return m_tabs.count(); }
 

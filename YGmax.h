@@ -12,6 +12,8 @@
 #include <QSettings>
 #include <QMouseEvent>
 #include <QCursor>
+#include <QStackedWidget>
+#include <QPlainTextEdit>
 #include "ToolBar.h"
 #include "CustomTitleBar.h"
 #include "SystemTrayIcon.h"
@@ -64,9 +66,12 @@ private:
     ResizeDir  m_resizeDir   = None;
     QPoint     m_resizeStart;      // 全局坐标，拖拽起点
     QRect      m_resizeOrigGeom;   // 拖拽起点时的窗口几何
-
+    // ── lua编辑器 ──────────────────────────────
+    QStackedWidget* m_stack         = nullptr;
+    QPlainTextEdit* m_textEditor    = nullptr;
     // ── 顶部固定区域 ─────────────────────────────────────────
     QAction*        m_newDocAct     = nullptr;
+    QAction*        m_newLua        = nullptr;
     CustomTitleBar* m_titleBar      = nullptr;
     ToolBar*        m_toolBar       = nullptr;
     DocumentTabBar* m_tabBar        = nullptr;

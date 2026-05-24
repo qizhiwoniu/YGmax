@@ -120,6 +120,18 @@ void DocumentTabBar::setCurrentTab(int index)
     emit tabChanged(index);
 }
 
+void DocumentTabBar::setTabData(int index, int kind)
+{
+    if (index < 0 || index >= m_tabs.count()) return;
+    m_tabs[index].kind = kind;
+}
+
+int DocumentTabBar::tabData(int index) const
+{
+    if (index < 0 || index >= m_tabs.count()) return 0;
+    return m_tabs[index].kind;
+}
+
 void DocumentTabBar::setTabModified(int index, bool modified)
 {
     if (index < 0 || index >= m_tabs.count()) return;

@@ -54,11 +54,14 @@ YGmax::YGmax(QWidget* parent)
         m_tabBar->removeTab(index);
         if (m_tabBar->count() == 0) {
             m_tabBar->setFixedHeight(0);
-            m_viewport->setVisible(false);
+            m_stack->setVisible(false);
         }
     });
     connect(m_tabBar, &DocumentTabBar::tabChanged, this, [this](int index) {
-        Q_UNUSED(index)
+        if (index < 0) return;
+        int kind = m_tabBar->tabData(index);
+        m_stack->setCurrentWidget(kind == 1 ? (QWidget*)m_textEditor
+                                             : (QWidget*)m_viewport);
     });
 
     // ── Explorer 选中 → Property Editor ──────────────────────
@@ -118,11 +121,21 @@ void YGmax::setupDockHost()
         QMainWindow::AllowTabbedDocks
     );
 
-    // ── 中央：3-D Viewport ────────────────────────────────────
+    // ── 中央：QStackedWidget（Viewport3D / 文本编辑器）────────
     m_viewport = new Viewport3D(m_dockHost);
     m_viewport->setMinimumSize(300, 200);
     m_viewport->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    m_dockHost->setCentralWidget(m_viewport);
+
+    m_textEditor = new QPlainTextEdit(m_dockHost);
+    m_textEditor->setPlaceholderText(tr("在此输入文本..."));
+    m_textEditor->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+
+    m_stack = new QStackedWidget(m_dockHost);
+    m_stack->addWidget(m_viewport);    // index 0 → 3D 视口
+    m_stack->addWidget(m_textEditor);  // index 1 → 文本编辑器
+    m_stack->setCurrentIndex(0);
+
+    m_dockHost->setCentralWidget(m_stack);
 
     // ── 底部面板 ──────────────────────────────────────────────
     m_assetPanel   = new AssetBrowserPanel(m_dockHost);
@@ -283,14 +296,23 @@ void YGmax::setupMenuBar()
     m_newDocAct = new QAction(tr("新建"), this);
     m_newDocAct->setShortcut(QKeySequence::New);
     connect(m_newDocAct, &QAction::triggered, this, [this]() {
-        static int n = 1;
         m_tabBar->setFixedHeight(34);
-        m_tabBar->addTab(tr("未命名文档%1").arg(n == 1 ? "" : QString(" %1").arg(n)));
-        n++;
+        int idx = m_tabBar->addTab(tr("未命名文档"));
+        m_tabBar->setTabData(idx, 0);  // 0 → 3D 视口
         m_tabBar->show();
-        m_viewport->setVisible(true);
+        m_stack->setCurrentWidget(m_viewport);
         });
     fileMenu->addAction(m_newDocAct);
+    m_newLua = new QAction(tr("新建Lua脚本"), this);
+    m_newLua->setShortcut(QKeySequence::New);
+    connect(m_newLua, &QAction::triggered, this, [this]() {
+        m_tabBar->setFixedHeight(34);
+        int idx = m_tabBar->addTab(tr("未命名Lua脚本"));
+        m_tabBar->setTabData(idx, 1);  // 1 → 文本编辑器
+        m_tabBar->show();
+        m_stack->setCurrentWidget(m_textEditor);
+        });
+    fileMenu->addAction(m_newLua);
 
     QAction* openAct = new QAction(tr("打开"), this);
     openAct->setShortcut(QKeySequence::Open);
