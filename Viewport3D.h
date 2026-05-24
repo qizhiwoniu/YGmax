@@ -5,10 +5,13 @@
 //  基于 QOpenGLWidget (Qt 6) + OpenGL 3.3 Core Profile
 //  Visual Studio 2022 + Qt 6.10 msvc2022_64 专用
 //
-//  工具栏：视角选择 | Full Render / Wireframe  （去掉了 Play / 全屏）
-//  场景  ：addBox / addSphere / addPlane
+//  工具栏：视角选择 | Full Render / Wireframe
+//  场景  ：addBox / addSphere / addPlane / addCylinder / addCone
 //  摄像机：中键旋转 | Shift+中键平移 | 滚轮缩放
 //  快捷键：F 聚焦选中 | Delete 删除选中
+//
+//  坐标原点：网格 XZ 平面交点 = 世界坐标 (0, 0, 0)
+//            Y 轴向上，X 轴向右（红），Z 轴向前（蓝）
 // ═══════════════════════════════════════════════════════════════
 
 #include <QOpenGLWidget>
@@ -25,6 +28,9 @@
 #include <QToolButton>
 #include <QComboBox>
 #include <QLabel>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
 #include <vector>
 #include <memory>
 
@@ -34,20 +40,46 @@
 enum class RenderMode { FullRender, Wireframe };
 
 // ───────────────────────────────────────────────────────────────
-//  场景对象（几何体 + GPU资源）
+//  物体种类（用于 Explorer 分组）
+// ───────────────────────────────────────────────────────────────
+enum class ObjectKind {
+    Mesh,    ///< 普通几何体 → Scene Objects
+    Light,   ///< 灯光       → Scene Lights
+    Lua      ///< Lua 脚本实体 → Scene Lua
+};
+
+// ───────────────────────────────────────────────────────────────
+//  场景对象（几何体 + GPU 资源）
 // ───────────────────────────────────────────────────────────────
 struct SceneObject
 {
-    QString   name;
-    QVector3D position{ 0,0,0 };
-    QVector3D rotation{ 0,0,0 };   // 欧拉角（度）
-    QVector3D scale   { 1,1,1 };
-    QColor    color   { 180,140,80 };
+    QString    name;
+    ObjectKind kind     = ObjectKind::Mesh;
+
+    QVector3D  position { 0, 0, 0 };
+    QVector3D  rotation { 0, 0, 0 };  ///< 欧拉角（度）
+    QVector3D  scale    { 1, 1, 1 };
+    QColor     color    { 180, 140, 80 };
+
+    bool       visible  = true;       ///< 显示 / 隐藏（影响渲染，不删除物体）
+    int        layer    = 0;          ///< 图层索引（0=Default）
 
     QOpenGLVertexArrayObject vao;
-    QOpenGLBuffer            vbo{ QOpenGLBuffer::VertexBuffer };
-    QOpenGLBuffer            ebo{ QOpenGLBuffer::IndexBuffer  };
+    QOpenGLBuffer            vbo { QOpenGLBuffer::VertexBuffer };
+    QOpenGLBuffer            ebo { QOpenGLBuffer::IndexBuffer  };
     int indexCount = 0;
+};
+
+// ───────────────────────────────────────────────────────────────
+//  轻量属性快照（供 PropertyEditorPanel 读写，无 OpenGL 依赖）
+// ───────────────────────────────────────────────────────────────
+struct ObjectProps
+{
+    QVector3D position;
+    QVector3D rotation;
+    QVector3D scale;
+    bool      visible = true;
+    int       layer   = 0;
 };
 
 // ───────────────────────────────────────────────────────────────
@@ -58,11 +90,11 @@ struct OrbitCamera
     float     yaw   =  35.f;
     float     pitch =  25.f;
     float     dist  =  12.f;
-    QVector3D target{ 0,0,0 };
+    QVector3D target{ 0, 0, 0 };   ///< 始终对准世界坐标原点方向
 
-    QVector3D  position()          const;
-    QMatrix4x4 viewMatrix()        const;
-    QMatrix4x4 projMatrix(float a) const;
+    QVector3D  position()                    const;
+    QMatrix4x4 viewMatrix()                  const;
+    QMatrix4x4 projMatrix(float a, bool ortho = false) const;
 };
 
 // ───────────────────────────────────────────────────────────────
@@ -78,37 +110,73 @@ public:
     ~Viewport3D() override;
 
     // ── 场景 API ──────────────────────────────────────────────
-    void addBox   (const QString& name,
-                   QVector3D pos  = {0,0,0},
-                   QVector3D size = {1,1,1},
-                   QColor color   = {200,140,60});
+    void addBox     (const QString& name,
+                     QVector3D pos   = {0,0,0},
+                     QVector3D size  = {1,1,1},
+                     QColor    color = {200,140,60});
 
-    void addSphere(const QString& name,
-                   QVector3D pos  = {0,0,0},
-                   float radius   = 1.f,
-                   QColor color   = {100,160,220});
+    void addSphere  (const QString& name,
+                     QVector3D pos    = {0,0,0},
+                     float     radius = 1.f,
+                     QColor    color  = {100,160,220});
 
-    void addPlane (const QString& name,
-                   QVector3D pos  = {0,0,0},
-                   float size     = 5.f,
-                   QColor color   = {100,100,100});
+    void addCylinder(const QString& name,
+                     QVector3D pos    = {0,0,0},
+                     float     radius = 0.5f,
+                     float     height = 1.f,
+                     QColor    color  = {120,180,120});
+
+    void addCone    (const QString& name,
+                     QVector3D pos    = {0,0,0},
+                     float     radius = 0.5f,
+                     float     height = 1.f,
+                     QColor    color  = {180,120,180});
+
+    void addPlane   (const QString& name,
+                     QVector3D pos  = {0,0,0},
+                     float     size = 5.f,
+                     QColor    color = {100,100,100});
+
+    /// 灯光占位（小黄球），kind=Light → 分到 Scene Lights
+    void addLight   (const QString& name,
+                     QVector3D pos  = {0,0,0},
+                     QColor    color = {255,240,100});
 
     void clearScene();
     void setRenderMode(RenderMode mode);
 
+    // ── 属性读写（供 PropertyEditorPanel 双向绑定）────────────
+    /// 按名称读取属性快照；找不到返回 false
+    bool getObjectProps(const QString& name, ObjectProps& out) const;
+    /// 按名称写入属性并触发重绘；找不到返回 false
+    bool setObjectProps(const QString& name, const ObjectProps& props);
+
 signals:
-    void objectSelected(const QString& name);   // 供 PropertyEditor / Explorer 联动
+    /// name = 物体名称，kind = 种类（用于 Explorer 分组）
+    void objectAdded   (const QString& name, ObjectKind kind);
+    void objectRemoved (const QString& name);
+    void objectSelected(const QString& name);
+    void sceneCleared  ();
+
+    /// 属性被 Viewport 内部操作改变时发出（目前保留扩展）
+    void objectPropsChanged(const QString& name);
+
+public slots:
+    /// 由 Explorer 的 deleteRequested 信号触发，按名称删除物体
+    void deleteObjectByName(const QString& name);
 
 protected:
-    void initializeGL()           override;
-    void resizeGL(int w, int h)   override;
-    void paintGL()                override;
+    void initializeGL()            override;
+    void resizeGL(int w, int h)    override;
+    void paintGL()                 override;
 
-    void mousePressEvent  (QMouseEvent*  e) override;
-    void mouseMoveEvent   (QMouseEvent*  e) override;
-    void mouseReleaseEvent(QMouseEvent*  e) override;
-    void wheelEvent       (QWheelEvent*  e) override;
-    void keyPressEvent    (QKeyEvent*    e) override;
+    void mousePressEvent  (QMouseEvent*    e) override;
+    void mouseMoveEvent   (QMouseEvent*    e) override;
+    void mouseReleaseEvent(QMouseEvent*    e) override;
+    void wheelEvent       (QWheelEvent*    e) override;
+    void keyPressEvent    (QKeyEvent*      e) override;
+    void dragEnterEvent   (QDragEnterEvent* e) override;
+    void dropEvent        (QDropEvent*     e) override;
 
 private:
     // ── 初始化 ────────────────────────────────────────────────
@@ -121,15 +189,25 @@ private:
     void renderAxes();
     void renderObjects();
 
-    // ── 几何生成（静态工具函数）──────────────────────────────
-    static void buildBox   (std::vector<float>& v, std::vector<uint32_t>& i, QVector3D half);
-    static void buildSphere(std::vector<float>& v, std::vector<uint32_t>& i, float r, int stacks=24, int slices=32);
-    static void buildPlane (std::vector<float>& v, std::vector<uint32_t>& i, float half, int segs=10);
+    // ── 几何生成 ──────────────────────────────────────────────
+    static void buildBox     (std::vector<float>& v, std::vector<uint32_t>& i, QVector3D half);
+    static void buildSphere  (std::vector<float>& v, std::vector<uint32_t>& i, float r, int stacks=24, int slices=32);
+    static void buildPlane   (std::vector<float>& v, std::vector<uint32_t>& i, float half, int segs=10);
+    static void buildCylinder(std::vector<float>& v, std::vector<uint32_t>& i, float radius=0.5f, float height=1.f, int slices=32);
+    static void buildCone    (std::vector<float>& v, std::vector<uint32_t>& i, float radius=0.5f, float height=1.f, int slices=32);
+
+    // ── 右键菜单 ──────────────────────────────────────────────
+    void showContextMenu(const QPoint& pos);
 
     // ── GPU 上传 ──────────────────────────────────────────────
     void uploadObject(SceneObject& obj,
-                      const std::vector<float>& verts,
+                      const std::vector<float>&    verts,
                       const std::vector<uint32_t>& indices);
+
+    // ── 通用内部添加（设置 kind 后调用）──────────────────────
+    void finalizeAdd(std::unique_ptr<SceneObject> obj,
+                     const std::vector<float>&    verts,
+                     const std::vector<uint32_t>& indices);
 
     // ── 点击拾取 ──────────────────────────────────────────────
     void pickObject(const QPoint& screenPos);
@@ -148,17 +226,18 @@ private:
     // ── 摄像机 ────────────────────────────────────────────────
     OrbitCamera m_camera;
 
-    // ── 地面网格 ──────────────────────────────────────────────
+    // ── 地面网格（XZ 平面，交点即世界原点 0,0,0）────────────
     QOpenGLVertexArrayObject m_gridVAO;
-    QOpenGLBuffer            m_gridVBO{ QOpenGLBuffer::VertexBuffer };
+    QOpenGLBuffer            m_gridVBO { QOpenGLBuffer::VertexBuffer };
     int m_gridVertCount = 0;
 
     // ── 坐标轴图示 ────────────────────────────────────────────
     QOpenGLVertexArrayObject m_axisVAO;
-    QOpenGLBuffer            m_axisVBO{ QOpenGLBuffer::VertexBuffer };
+    QOpenGLBuffer            m_axisVBO { QOpenGLBuffer::VertexBuffer };
 
     // ── 渲染状态 ──────────────────────────────────────────────
     RenderMode m_renderMode = RenderMode::FullRender;
+    bool       m_useOrtho   = false;
     int m_vpW = 1, m_vpH = 1;
 
     // ── 鼠标 ──────────────────────────────────────────────────
@@ -167,8 +246,8 @@ private:
     bool   m_panning  = false;
 
     // ── Overlay 控件 ──────────────────────────────────────────
-    QWidget*   m_overlayBar   = nullptr;
-    QComboBox* m_viewCombo    = nullptr;
-    QComboBox* m_renderCombo  = nullptr;
-    QLabel*    m_statsLabel   = nullptr;
+    QWidget*   m_overlayBar  = nullptr;
+    QComboBox* m_viewCombo   = nullptr;
+    QComboBox* m_renderCombo = nullptr;
+    QLabel*    m_statsLabel  = nullptr;
 };
