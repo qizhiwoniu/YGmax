@@ -109,6 +109,9 @@
     <QtMoc Include="DocumentTabBar.h" />
     <QtMoc Include="RightPanel.h" />
     <QtMoc Include="BottomPanel.h" />
+    <QtMoc Include="SceneRunnerWidget.h" />
+    <ClInclude Include="SceneShaders.h" />
+    <QtMoc Include="SettingsDialog.h" />
     <ClInclude Include="version.h" />
     <QtRcc Include="YGmax.qrc" />
     <QtMoc Include="YGmax.h" />
@@ -117,6 +120,8 @@
     <ClCompile Include="CustomTitleBar.cpp" />
     <ClCompile Include="DocumentTabBar.cpp" />
     <ClCompile Include="RightPanel.cpp" />
+    <ClCompile Include="SceneRunnerWidget.cpp" />
+    <ClCompile Include="SettingsDialog.cpp" />
     <ClCompile Include="SystemTrayIcon.cpp" />
     <ClCompile Include="ToolBar.cpp" />
     <ClCompile Include="Viewport3D.cpp" />

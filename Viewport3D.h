@@ -64,6 +64,10 @@ struct SceneObject
     bool       visible  = true;       ///< 显示 / 隐藏（影响渲染，不删除物体）
     int        layer    = 0;          ///< 图层索引（0=Default）
 
+    // ── CPU 端缓存（供 SceneRunnerWidget 跨 context 重新上传）──
+    std::vector<float>    vertices;
+    std::vector<uint32_t> indices;
+
     QOpenGLVertexArrayObject vao;
     QOpenGLBuffer            vbo { QOpenGLBuffer::VertexBuffer };
     QOpenGLBuffer            ebo { QOpenGLBuffer::IndexBuffer  };
@@ -150,6 +154,11 @@ public:
     bool getObjectProps(const QString& name, ObjectProps& out) const;
     /// 按名称写入属性并触发重绘；找不到返回 false
     bool setObjectProps(const QString& name, const ObjectProps& props);
+    // 返回当前场景对象的只读引用，供 SceneRunnerWidget 拍快照
+    const std::vector<std::unique_ptr<SceneObject>>& sceneObjects() const
+    {
+        return m_objects;
+    }
 
 signals:
     /// name = 物体名称，kind = 种类（用于 Explorer 分组）

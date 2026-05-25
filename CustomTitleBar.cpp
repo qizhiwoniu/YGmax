@@ -1,5 +1,6 @@
 #include "stdafx.h" 
 #include "CustomTitleBar.h"
+#include "SettingsDialog.h"
 
 CustomTitleBar::CustomTitleBar(QWidget* parent)
     : QWidget(parent)
@@ -33,7 +34,11 @@ CustomTitleBar::CustomTitleBar(QWidget* parent)
     m_settingsMenu->addAction(tr("主题"));
     m_settingsMenu->addAction(tr("语言"));
     m_settingsMenu->addSeparator();
-    m_settingsMenu->addAction(tr("偏好设置"));
+    QAction* prefAction = m_settingsMenu->addAction(tr("偏好设置"));
+    connect(prefAction, &QAction::triggered, this, [this]() {
+        SettingsDialog dlg(window());
+        dlg.exec();
+    });
 
     connect(m_settingsBtn, &QPushButton::clicked, this, [this]() {
         // 菜单弹出位置在按钮正下方

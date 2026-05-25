@@ -22,6 +22,7 @@
 #include "RightPanel.h"
 #include "Viewport3D.h"
 
+class SceneRunnerWidget;
 class YGmax : public QWidget
 {
     Q_OBJECT
@@ -66,6 +67,7 @@ private:
     ResizeDir  m_resizeDir   = None;
     QPoint     m_resizeStart;      // 全局坐标，拖拽起点
     QRect      m_resizeOrigGeom;   // 拖拽起点时的窗口几何
+    SceneRunnerWidget* m_inlineRunner = nullptr;
     // ── lua编辑器 ──────────────────────────────
     QStackedWidget* m_stack         = nullptr;
     QPlainTextEdit* m_textEditor    = nullptr;

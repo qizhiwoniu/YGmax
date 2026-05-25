@@ -6,7 +6,7 @@
 #define VERSION_MAJOR      1
 #define VERSION_MINOR      0
 #define VERSION_PATCH      0
-#define VERSION_BUILD      0
+#define VERSION_BUILD      1
 
 // 公司 / 产品信息
 #define VER_COMPANY_NAME    "Qizhiwoniu"

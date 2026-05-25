@@ -51,10 +51,10 @@ ToolBar::ToolBar(QWidget* parent)
     layout->addWidget(addSeparator());
 
     // ── 图标按钮（按需增减）──────────────────────────────
-    layout->addWidget(addIconBtn(":/YGmax/ico/play96x96.png", tr("运行"), 3, false));
-    layout->addWidget(addIconBtn(":/YGmax/ico/start96x96.png", tr("开始"), 4, false));
+    layout->addWidget(addIconBtn(":/YGmax/ico/play96x96.png", tr("开始"), 3, false));
+    layout->addWidget(addIconBtn(":/YGmax/ico/start96x96.png", tr("运行"), 4, false));
     layout->addWidget(addSeparator());
-    layout->addWidget(addIconBtn(":/YGmax/ico/f96x96.png", tr("功能"), 5, false));
+    layout->addWidget(addIconBtn(":/YGmax/ico/f96x96.png", tr("手柄映射"), 5, false));
     layout->addStretch();
     // ── 图标按钮（按需增减）────────────────────────────── 
     layout->addWidget(addIconBtn("💾", tr("保存"), 8, false));
@@ -104,7 +104,7 @@ QPushButton* ToolBar::addIconBtn(const QString& icon, const QString& tooltip, in
 
     connect(btn, &QPushButton::clicked, this, [this, id]() {
         emit actionTriggered(id);
-        });
+    });
     return btn;
 }
 

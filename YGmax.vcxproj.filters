@@ -78,6 +78,12 @@
     <ClCompile Include="BottomPanel.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="SceneRunnerWidget.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="SettingsDialog.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="SystemTrayIcon.h">
@@ -104,9 +110,18 @@
     <QtMoc Include="BottomPanel.h">
       <Filter>Header Files</Filter>
     </QtMoc>
+    <QtMoc Include="SceneRunnerWidget.h">
+      <Filter>Header Files</Filter>
+    </QtMoc>
+    <QtMoc Include="SettingsDialog.h">
+      <Filter>Header Files</Filter>
+    </QtMoc>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="version.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SceneShaders.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

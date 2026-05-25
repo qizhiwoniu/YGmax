@@ -7,6 +7,8 @@
 #include "BottomPanel.h"
 #include "RightPanel.h"
 #include "Viewport3D.h"
+#include "SettingsDialog.h"
+#include "SceneRunnerWidget.h"
 #include <QCloseEvent>
 
 YGmax::YGmax(QWidget* parent)
@@ -45,8 +47,60 @@ YGmax::YGmax(QWidget* parent)
     // ── 工具栏 ───────────────────────────────────────────────
     connect(m_toolBar, &ToolBar::selectModeActivated,  this, []() {});
     connect(m_toolBar, &ToolBar::defaultModeActivated, this, []() {});
-    connect(m_toolBar, &ToolBar::actionTriggered,      this, [](int id) { Q_UNUSED(id) });
+    //connect(m_toolBar, &ToolBar::actionTriggered,      this, [](int id) { Q_UNUSED(id) });
+    connect(m_toolBar, &ToolBar::actionTriggered, this, [this](int id) {
+        // ── ID 4：在主窗口内嵌运行场景 ──────────────────────────
+        if (id == 4) {
+            // 如果已有内嵌 runner 则停止并销毁
+            if (m_inlineRunner) {
+                m_inlineRunner->stop();
+                m_stack->removeWidget(m_inlineRunner);
+                delete m_inlineRunner;
+                m_inlineRunner = nullptr;
+                // 恢复回 Viewport 视图
+                m_stack->setCurrentWidget(m_viewport);
+                return;  // 第二次点击 = 停止
+            }
+            // 拍快照：把当前场景对象传给 runner
+            m_inlineRunner = new SceneRunnerWidget(
+                m_viewport->sceneObjects(), m_stack);  // ← 见下方说明
+            m_stack->addWidget(m_inlineRunner);
+            m_stack->setCurrentWidget(m_inlineRunner);
+            m_inlineRunner->setFocus();
+        }
 
+        // ── ID 3：独立窗口运行场景 ──────────────────────────────
+        if (id == 3) {
+            auto* win = new QWidget(nullptr,
+                Qt::Window | Qt::WindowCloseButtonHint);
+            win->setWindowTitle(tr("场景预览"));
+            win->resize(960, 600);
+            win->setAttribute(Qt::WA_DeleteOnClose);
+
+            auto* runner = new SceneRunnerWidget(
+                m_viewport->sceneObjects(), win);
+
+            auto* lay = new QVBoxLayout(win);
+            lay->setContentsMargins(0, 0, 0, 0);
+            lay->addWidget(runner);
+            win->setLayout(lay);
+
+            // 窗口关闭时停止 GL 定时器，防止在析构前继续渲染
+            connect(win, &QWidget::destroyed, runner,
+                [runner]() { runner->stop(); });
+
+            win->show();
+        }
+        // ── ID 5：设置窗口 ──────────────────────────────────────
+        if (id == 5) {
+        SettingsDialog dlg(this);
+        // 手柄映射是第 4 个 Tab（index 3）
+        if (auto* tabs = dlg.findChild<QTabWidget*>())
+            tabs->setCurrentIndex(3);
+        dlg.exec();
+        }
+        });
+    
     // ── 文档标签 ─────────────────────────────────────────────
     connect(m_tabBar, &DocumentTabBar::newTabRequested,
             m_newDocAct, &QAction::trigger);
