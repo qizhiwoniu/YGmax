@@ -124,6 +124,9 @@
     <ClInclude Include="SceneShaders.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="RightPanel.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Image Include="ico\Select.ico">
