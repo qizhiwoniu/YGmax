@@ -107,9 +107,9 @@
     <QtMoc Include="SystemTrayIcon.h" />
     <QtMoc Include="ToolBar.h" />
     <QtMoc Include="DocumentTabBar.h" />
-    <QtMoc Include="RightPanel.h" />
     <QtMoc Include="BottomPanel.h" />
     <QtMoc Include="SceneRunnerWidget.h" />
+    <ClInclude Include="RightPanel.h" />
     <ClInclude Include="SceneShaders.h" />
     <QtMoc Include="SettingsDialog.h" />
     <ClInclude Include="version.h" />

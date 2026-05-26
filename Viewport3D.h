@@ -40,6 +40,18 @@
 enum class RenderMode { FullRender, Wireframe };
 
 // ───────────────────────────────────────────────────────────────
+//  Gizmo 工具模式（3ds Max 风格）
+//  None   — 普通选择
+//  Move   — W: XYZ 平移轴（箭头）
+//  Rotate — E: XYZ 旋转环（经纬线球）
+//  Scale  — R: XYZ 缩放轴（方块头）
+// ───────────────────────────────────────────────────────────────
+enum class GizmoMode { None, Move, Rotate, Scale };
+
+// Gizmo 轴枚举（用于拖拽时判断约束方向）
+enum class GizmoAxis { None, X, Y, Z };
+
+// ───────────────────────────────────────────────────────────────
 //  物体种类（用于 Explorer 分组）
 // ───────────────────────────────────────────────────────────────
 enum class ObjectKind {
@@ -259,4 +271,29 @@ private:
     QComboBox* m_viewCombo   = nullptr;
     QComboBox* m_renderCombo = nullptr;
     QLabel*    m_statsLabel  = nullptr;
+
+    // ── Gizmo ─────────────────────────────────────────────────
+    GizmoMode  m_gizmoMode      = GizmoMode::None;
+    GizmoAxis  m_gizmoAxis      = GizmoAxis::None;
+    bool       m_gizmoDragging  = false;
+    QPoint     m_gizmoDragStart;
+    QVector3D  m_gizmoDragOrigPos;
+    QVector3D  m_gizmoDragOrigRot;
+    QVector3D  m_gizmoDragOrigSca;
+
+    // Gizmo VAO/VBO（每帧动态重填，轻量）
+    QOpenGLVertexArrayObject m_gizmoVAO;
+    QOpenGLBuffer            m_gizmoVBO { QOpenGLBuffer::VertexBuffer };
+    bool                     m_gizmoGPUReady = false;
+
+    // ── Gizmo 内部方法 ────────────────────────────────────────
+    void      renderGizmo();
+    GizmoAxis pickGizmoAxis(const QPoint& screenPos);
+    void      applyGizmoDrag(const QPoint& currentPos);
+    QPointF   worldToScreen(const QVector3D& wp) const;
+    // 几何辅助
+    static void buildArrow (std::vector<float>& v, const QVector3D& dir,
+                             const QVector3D& col, float len, bool scaleCube);
+    static void buildRing  (std::vector<float>& v, const QVector3D& axis,
+                             const QVector3D& col, float r, int segs = 48);
 };
