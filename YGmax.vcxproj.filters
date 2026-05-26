@@ -101,9 +101,6 @@
     <QtMoc Include="DocumentTabBar.h">
       <Filter>Header Files</Filter>
     </QtMoc>
-    <QtMoc Include="RightPanel.h">
-      <Filter>Header Files</Filter>
-    </QtMoc>
     <QtMoc Include="Viewport3D.h">
       <Filter>Header Files</Filter>
     </QtMoc>
@@ -114,6 +111,9 @@
       <Filter>Header Files</Filter>
     </QtMoc>
     <QtMoc Include="SettingsDialog.h">
+      <Filter>Header Files</Filter>
+    </QtMoc>
+    <QtMoc Include="RightPanel.h">
       <Filter>Header Files</Filter>
     </QtMoc>
   </ItemGroup>

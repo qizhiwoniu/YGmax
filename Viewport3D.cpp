@@ -96,6 +96,7 @@ Viewport3D::~Viewport3D()
     makeCurrent();
     m_gridVAO.destroy(); m_gridVBO.destroy();
     m_axisVAO.destroy(); m_axisVBO.destroy();
+    if (m_gizmoGPUReady) { m_gizmoVAO.destroy(); m_gizmoVBO.destroy(); }
     for (auto& o : m_objects) {
         o->vao.destroy();
         o->vbo.destroy();
@@ -194,6 +195,19 @@ void Viewport3D::initializeGL()
     initShaders();
     initGrid();
     initAxes();
+
+    // Gizmo VAO（内容每帧重填，这里只创建容器）
+    m_gizmoVAO.create();
+    m_gizmoVBO.create();
+    m_gizmoVAO.bind();
+    m_gizmoVBO.bind();
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float), nullptr);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float),
+                          (void*)(3*sizeof(float)));
+    m_gizmoVAO.release();
+    m_gizmoGPUReady = true;
 }
 
 void Viewport3D::initShaders()
@@ -287,6 +301,8 @@ void Viewport3D::paintGL()
     renderGrid();
     renderAxes();
     renderObjects();
+    if (m_selectedIdx >= 0 && m_gizmoMode != GizmoMode::None)
+        renderGizmo();
     m_overlayBar->raise();
 }
 
@@ -672,6 +688,23 @@ void Viewport3D::mousePressEvent(QMouseEvent* e)
         e->accept(); return;
     }
     if (e->button() == Qt::LeftButton) {
+        // 先尝试拾取 Gizmo 轴
+        if (m_selectedIdx >= 0 && m_gizmoMode != GizmoMode::None) {
+            GizmoAxis ax = pickGizmoAxis(e->pos());
+            if (ax != GizmoAxis::None) {
+                m_gizmoAxis      = ax;
+                m_gizmoDragging  = true;
+                m_gizmoDragStart = e->pos();
+                auto& obj = *m_objects[m_selectedIdx];
+                m_gizmoDragOrigPos = obj.position;
+                m_gizmoDragOrigRot = obj.rotation;
+                m_gizmoDragOrigSca = obj.scale;
+                e->accept(); return;
+            }
+        }
+        // 否则普通对象拾取
+        m_gizmoDragging = false;
+        m_gizmoAxis     = GizmoAxis::None;
         pickObject(e->pos());
         e->accept();
     }
@@ -680,6 +713,14 @@ void Viewport3D::mousePressEvent(QMouseEvent* e)
 void Viewport3D::mouseMoveEvent(QMouseEvent* e)
 {
     const QPoint d = e->pos() - m_lastMouse;
+
+    // Gizmo 拖拽优先
+    if (m_gizmoDragging && (e->buttons() & Qt::LeftButton)) {
+        applyGizmoDrag(e->pos());
+        e->accept();
+        return;
+    }
+
     m_lastMouse = e->pos();
     if (m_rotating) {
         m_camera.yaw   -= d.x() * 0.45f;
@@ -694,14 +735,25 @@ void Viewport3D::mouseMoveEvent(QMouseEvent* e)
         m_camera.target -= right * d.x() * spd * 10.f;
         m_camera.target += up    * d.y() * spd * 10.f;
         update();
+    } else if (m_gizmoMode != GizmoMode::None && m_selectedIdx >= 0) {
+        // 鼠标悬停时高亮轴
+        GizmoAxis hover = pickGizmoAxis(e->pos());
+        if (hover != m_gizmoAxis) {
+            m_gizmoAxis = hover;
+            update();
+        }
     }
     e->accept();
 }
 
-void Viewport3D::mouseReleaseEvent(QMouseEvent*)
+void Viewport3D::mouseReleaseEvent(QMouseEvent* e)
 {
-    m_rotating = false;
-    m_panning  = false;
+    m_rotating      = false;
+    m_panning       = false;
+    if (m_gizmoDragging) {
+        m_gizmoDragging = false;
+        // 保留 m_gizmoAxis 用于悬停高亮（移动鼠标会重新检测）
+    }
 }
 
 void Viewport3D::wheelEvent(QWheelEvent* e)
@@ -714,6 +766,32 @@ void Viewport3D::wheelEvent(QWheelEvent* e)
 
 void Viewport3D::keyPressEvent(QKeyEvent* e)
 {
+    // ── Gizmo 模式切换 (3ds Max 风格) ─────────────────────────
+    if (e->key() == Qt::Key_W) {
+        m_gizmoMode = GizmoMode::Move;
+        m_gizmoAxis = GizmoAxis::None;
+        update();
+        e->accept(); return;
+    }
+    if (e->key() == Qt::Key_E) {
+        m_gizmoMode = GizmoMode::Rotate;
+        m_gizmoAxis = GizmoAxis::None;
+        update();
+        e->accept(); return;
+    }
+    if (e->key() == Qt::Key_R) {
+        m_gizmoMode = GizmoMode::Scale;
+        m_gizmoAxis = GizmoAxis::None;
+        update();
+        e->accept(); return;
+    }
+    if (e->key() == Qt::Key_Q) {
+        m_gizmoMode = GizmoMode::None;
+        m_gizmoAxis = GizmoAxis::None;
+        update();
+        e->accept(); return;
+    }
+
     if (e->key() == Qt::Key_F && m_selectedIdx >= 0) {
         m_camera.target = m_objects[m_selectedIdx]->position;
         m_camera.dist   = 8.f;
@@ -727,6 +805,7 @@ void Viewport3D::keyPressEvent(QKeyEvent* e)
         m_objects[m_selectedIdx]->ebo.destroy();
         m_objects.erase(m_objects.begin() + m_selectedIdx);
         m_selectedIdx = -1;
+        m_gizmoAxis   = GizmoAxis::None;
         m_statsLabel->setText(QString("%1 object(s)").arg(m_objects.size()));
         doneCurrent();
         emit objectRemoved(removedName);
@@ -894,7 +973,320 @@ void Viewport3D::dropEvent(QDropEvent* e)
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  按名称删除（由 Explorer 右键删除触发）
+//  Gizmo — 3ds Max 风格变换控件
+//  Move  (W)  : 三条带箭头的轴线  X=红 Y=绿 Z=蓝
+//  Rotate(E)  : 三个经纬旋转圆环  X=红 Y=绿 Z=蓝
+//  Scale (R)  : 三条带方块头的轴线 X=红 Y=绿 Z=蓝
+// ═══════════════════════════════════════════════════════════════
+
+// ─── 辅助：世界坐标 → 屏幕像素 ─────────────────────────────
+QPointF Viewport3D::worldToScreen(const QVector3D& wp) const
+{
+    float asp = (float)m_vpW / m_vpH;
+    QVector4D clip = m_camera.projMatrix(asp, m_useOrtho)
+                     * m_camera.viewMatrix()
+                     * QVector4D(wp, 1.f);
+    if (qAbs(clip.w()) < 1e-6f) return {-9999, -9999};
+    float nx = clip.x() / clip.w();
+    float ny = clip.y() / clip.w();
+    return { (nx + 1.f) * 0.5f * m_vpW,
+             (1.f - ny) * 0.5f * m_vpH };
+}
+
+// ─── 单根轴箭头（线段 + 锥头 / 方块头）──────────────────────
+// 格式：pos(3) + col(3)，适配 flatShader
+void Viewport3D::buildArrow(std::vector<float>& v,
+                              const QVector3D& dir,
+                              const QVector3D& col,
+                              float len, bool scaleCube)
+{
+    QVector3D tip = dir * len;
+
+    // 轴杆线段（两顶点）
+    v.insert(v.end(), { 0.f, 0.f, 0.f, col.x(), col.y(), col.z() });
+    v.insert(v.end(), { tip.x(), tip.y(), tip.z(), col.x(), col.y(), col.z() });
+
+    if (scaleCube) {
+        // Scale 模式：方块头（6条边 = 12顶点线段，形成正方体轮廓）
+        float s = len * 0.08f;
+        // 先找两个与 dir 垂直的轴
+        QVector3D u = (qAbs(dir.x()) < 0.9f)
+                      ? QVector3D::crossProduct(dir, {1,0,0}).normalized()
+                      : QVector3D::crossProduct(dir, {0,1,0}).normalized();
+        QVector3D w2 = QVector3D::crossProduct(dir, u).normalized();
+
+        QVector3D corners[8];
+        for (int si = 0; si < 8; ++si) {
+            float sx = (si & 1) ? s : -s;
+            float sy = (si & 2) ? s : -s;
+            float sz = (si & 4) ? s : -s;
+            corners[si] = tip + u * sx + w2 * sy + dir * sz;
+        }
+        // 12条棱
+        int edges[12][2] = {
+            {0,1},{2,3},{4,5},{6,7},
+            {0,2},{1,3},{4,6},{5,7},
+            {0,4},{1,5},{2,6},{3,7}
+        };
+        for (auto& e : edges) {
+            for (int k = 0; k < 2; ++k) {
+                QVector3D& c = corners[e[k]];
+                v.insert(v.end(), { c.x(), c.y(), c.z(), col.x(), col.y(), col.z() });
+            }
+        }
+    } else {
+        // Move 模式：三角形锥头（3条边从锥尖到圆底，简化为4条线）
+        float coneLen = len * 0.18f;
+        float coneR   = len * 0.045f;
+        QVector3D base = tip - dir * coneLen;
+
+        QVector3D u = (qAbs(dir.x()) < 0.9f)
+                      ? QVector3D::crossProduct(dir, {1,0,0}).normalized()
+                      : QVector3D::crossProduct(dir, {0,1,0}).normalized();
+        QVector3D w2 = QVector3D::crossProduct(dir, u).normalized();
+
+        for (int k = 0; k < 4; ++k) {
+            float a = k * (float)M_PI * 0.5f;
+            QVector3D ring = base + (u * cosf(a) + w2 * sinf(a)) * coneR;
+            v.insert(v.end(), { tip.x(), tip.y(), tip.z(), col.x(), col.y(), col.z() });
+            v.insert(v.end(), { ring.x(), ring.y(), ring.z(), col.x(), col.y(), col.z() });
+        }
+    }
+}
+
+// ─── 旋转圆环（经度线）──────────────────────────────────────
+void Viewport3D::buildRing(std::vector<float>& v,
+                             const QVector3D& axis,
+                             const QVector3D& col,
+                             float r, int segs)
+{
+    // 找两个与 axis 垂直的基向量
+    QVector3D u = (qAbs(axis.x()) < 0.9f)
+                  ? QVector3D::crossProduct(axis, {1,0,0}).normalized()
+                  : QVector3D::crossProduct(axis, {0,1,0}).normalized();
+    QVector3D w2 = QVector3D::crossProduct(axis, u).normalized();
+
+    for (int i = 0; i < segs; ++i) {
+        float a0 = 2.f * (float)M_PI * i       / segs;
+        float a1 = 2.f * (float)M_PI * (i + 1) / segs;
+        QVector3D p0 = (u * cosf(a0) + w2 * sinf(a0)) * r;
+        QVector3D p1 = (u * cosf(a1) + w2 * sinf(a1)) * r;
+        v.insert(v.end(), { p0.x(), p0.y(), p0.z(), col.x(), col.y(), col.z() });
+        v.insert(v.end(), { p1.x(), p1.y(), p1.z(), col.x(), col.y(), col.z() });
+    }
+}
+
+// ─── Gizmo 渲染 ─────────────────────────────────────────────
+void Viewport3D::renderGizmo()
+{
+    if (!m_gizmoGPUReady) return;
+    if (m_selectedIdx < 0 || m_selectedIdx >= (int)m_objects.size()) return;
+
+    auto& obj  = *m_objects[m_selectedIdx];
+    QVector3D center = obj.position;
+
+    // Gizmo 固定屏幕大小：根据到摄像机距离缩放
+    float dist  = (center - m_camera.position()).length();
+    float scale = dist * 0.18f;
+
+    // 三轴颜色
+    static const QVector3D cX { 0.95f, 0.20f, 0.20f };
+    static const QVector3D cY { 0.20f, 0.90f, 0.20f };
+    static const QVector3D cZ { 0.25f, 0.50f, 0.95f };
+
+    // 高亮选中轴（变亮/白）
+    auto highlight = [&](QVector3D col, GizmoAxis ax) -> QVector3D {
+        if (m_gizmoAxis == ax)
+            return col * 0.4f + QVector3D(0.9f, 0.9f, 0.9f) * 0.6f;
+        return col;
+    };
+
+    std::vector<float> verts;
+
+    if (m_gizmoMode == GizmoMode::Rotate) {
+        buildRing(verts, {1,0,0}, highlight(cX, GizmoAxis::X), scale);
+        buildRing(verts, {0,1,0}, highlight(cY, GizmoAxis::Y), scale);
+        buildRing(verts, {0,0,1}, highlight(cZ, GizmoAxis::Z), scale);
+    } else {
+        bool sc = (m_gizmoMode == GizmoMode::Scale);
+        buildArrow(verts, {1,0,0}, highlight(cX, GizmoAxis::X), scale, sc);
+        buildArrow(verts, {0,1,0}, highlight(cY, GizmoAxis::Y), scale, sc);
+        buildArrow(verts, {0,0,1}, highlight(cZ, GizmoAxis::Z), scale, sc);
+    }
+
+    // 上传到 GPU
+    m_gizmoVAO.bind();
+    m_gizmoVBO.bind();
+    m_gizmoVBO.allocate(verts.data(), (int)(verts.size() * sizeof(float)));
+    // 重新绑定属性（因为是同一个 VAO，bind 时已记录）
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float), nullptr);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float),
+                          (void*)(3*sizeof(float)));
+
+    float asp = (float)m_vpW / m_vpH;
+    QMatrix4x4 model;
+    model.translate(center);
+    QMatrix4x4 mvp = m_camera.projMatrix(asp, m_useOrtho)
+                     * m_camera.viewMatrix()
+                     * model;
+
+    glDisable(GL_DEPTH_TEST);
+    m_flatShader.bind();
+    m_flatShader.setUniformValue("uMVP",   mvp);
+    m_flatShader.setUniformValue("uAlpha", 1.0f);
+    glLineWidth(2.5f);
+    glDrawArrays(GL_LINES, 0, (GLsizei)(verts.size() / 6));
+    m_flatShader.release();
+    m_gizmoVAO.release();
+    glEnable(GL_DEPTH_TEST);
+}
+
+// ─── 轴拾取：判断鼠标是否接近某条 Gizmo 轴 ─────────────────
+GizmoAxis Viewport3D::pickGizmoAxis(const QPoint& sp)
+{
+    if (m_selectedIdx < 0) return GizmoAxis::None;
+    auto& obj  = *m_objects[m_selectedIdx];
+    QVector3D center = obj.position;
+
+    float dist   = (center - m_camera.position()).length();
+    float gScale = dist * 0.18f;
+
+    // 轴端点（世界坐标）
+    QVector3D tips[3] = {
+        center + QVector3D(1,0,0) * gScale,
+        center + QVector3D(0,1,0) * gScale,
+        center + QVector3D(0,0,1) * gScale,
+    };
+    QPointF origin = worldToScreen(center);
+    float threshold = 14.f;   // 像素距离阈值
+
+    float bestDist = 1e9f;
+    GizmoAxis best = GizmoAxis::None;
+
+    if (m_gizmoMode == GizmoMode::Rotate) {
+        // 环拾取：检查鼠标到环圆心的屏幕距离是否接近环半径
+        QVector3D axes[3] = {{1,0,0},{0,1,0},{0,0,1}};
+        GizmoAxis axEnum[3] = { GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z };
+        for (int a = 0; a < 3; ++a) {
+            // 在环平面上采样24个点，取最近屏幕距离
+            QVector3D u = (qAbs(axes[a].x()) < 0.9f)
+                          ? QVector3D::crossProduct(axes[a], {1,0,0}).normalized()
+                          : QVector3D::crossProduct(axes[a], {0,1,0}).normalized();
+            QVector3D w2 = QVector3D::crossProduct(axes[a], u).normalized();
+            float minDist = 1e9f;
+            for (int k = 0; k < 24; ++k) {
+                float ang = 2.f * (float)M_PI * k / 24;
+                QVector3D pt = center + (u * cosf(ang) + w2 * sinf(ang)) * gScale;
+                QPointF ss = worldToScreen(pt);
+                float dx = ss.x() - sp.x(), dy = ss.y() - sp.y();
+                float d2 = dx*dx + dy*dy;
+                if (d2 < minDist) minDist = d2;
+            }
+            minDist = sqrtf(minDist);
+            if (minDist < threshold && minDist < bestDist) {
+                bestDist = minDist;
+                best = axEnum[a];
+            }
+        }
+    } else {
+        // 箭头/方块：线段最近距离
+        GizmoAxis axEnum[3] = { GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z };
+        for (int a = 0; a < 3; ++a) {
+            QPointF ts = worldToScreen(tips[a]);
+            // 线段 origin→ts，计算点 sp 到线段的屏幕距离
+            float dx = ts.x() - origin.x(), dy = ts.y() - origin.y();
+            float len2 = dx*dx + dy*dy;
+            float t = 0.f;
+            if (len2 > 1e-4f) {
+                t = ((sp.x() - origin.x()) * dx + (sp.y() - origin.y()) * dy) / len2;
+                t = qBound(0.f, t, 1.f);
+            }
+            float cx = origin.x() + t * dx - sp.x();
+            float cy = origin.y() + t * dy - sp.y();
+            float d  = sqrtf(cx*cx + cy*cy);
+            if (d < threshold && d < bestDist) {
+                bestDist = d;
+                best = axEnum[a];
+            }
+        }
+    }
+    return best;
+}
+
+// ─── Gizmo 拖拽：将屏幕 delta 映射到变换增量 ────────────────
+void Viewport3D::applyGizmoDrag(const QPoint& cur)
+{
+    if (m_selectedIdx < 0) return;
+    auto& obj = *m_objects[m_selectedIdx];
+
+    QPointF origin = worldToScreen(obj.position);
+    float dx = cur.x() - m_gizmoDragStart.x();
+    float dy = cur.y() - m_gizmoDragStart.y();
+
+    // 将屏幕 delta 投影到对应世界轴的屏幕方向上
+    // 这样沿轴方向拖是"有效分量"，垂直方向无效
+    float dist   = (obj.position - m_camera.position()).length();
+    float gScale = dist * 0.18f;
+
+    // 每种轴的屏幕方向（归一化）
+    auto axisScreenDir = [&](const QVector3D& axis) -> QPointF {
+        QPointF a = worldToScreen(obj.position);
+        QPointF b = worldToScreen(obj.position + axis * gScale);
+        float adx = b.x() - a.x(), ady = b.y() - a.y();
+        float len  = sqrtf(adx*adx + ady*ady);
+        if (len < 1e-4f) return {1.f, 0.f};
+        return { adx / len, ady / len };
+    };
+
+    QVector3D axisDir;
+    switch (m_gizmoAxis) {
+    case GizmoAxis::X: axisDir = {1,0,0}; break;
+    case GizmoAxis::Y: axisDir = {0,1,0}; break;
+    case GizmoAxis::Z: axisDir = {0,0,1}; break;
+    default: return;
+    }
+
+    QPointF sd = axisScreenDir(axisDir);
+    // 有效分量（屏幕像素投影到轴方向）
+    float proj = dx * (float)sd.x() + dy * (float)sd.y();
+
+    // 灵敏度：每像素对应多少世界单位
+    float sens = gScale / (float)qMax(m_vpW, m_vpH) * 3.5f;
+
+    if (m_gizmoMode == GizmoMode::Move) {
+        QVector3D delta = axisDir * proj * sens;
+        obj.position = m_gizmoDragOrigPos + delta;
+
+    } else if (m_gizmoMode == GizmoMode::Rotate) {
+        float angle = proj * 1.0f;    // 1px ≈ 1°
+        QVector3D rot = m_gizmoDragOrigRot;
+        switch (m_gizmoAxis) {
+        case GizmoAxis::X: rot.setX(rot.x() + angle); break;
+        case GizmoAxis::Y: rot.setY(rot.y() + angle); break;
+        case GizmoAxis::Z: rot.setZ(rot.z() + angle); break;
+        default: break;
+        }
+        obj.rotation = rot;
+
+    } else if (m_gizmoMode == GizmoMode::Scale) {
+        float factor = 1.f + proj * sens;
+        QVector3D sca = m_gizmoDragOrigSca;
+        switch (m_gizmoAxis) {
+        case GizmoAxis::X: sca.setX(qMax(0.0001f, sca.x() * factor)); break;
+        case GizmoAxis::Y: sca.setY(qMax(0.0001f, sca.y() * factor)); break;
+        case GizmoAxis::Z: sca.setZ(qMax(0.0001f, sca.z() * factor)); break;
+        default: break;
+        }
+        obj.scale = sca;
+    }
+
+    emit objectPropsChanged(obj.name);
+    update();
+}
+
+// ═══════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════
 void Viewport3D::deleteObjectByName(const QString& name)
 {

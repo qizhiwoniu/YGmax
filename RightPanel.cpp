@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "RightPanel.h"
+#include <memory>
 
 // ─────────────────────────────────────────────────────────────
 //  共用暗色样式
@@ -392,6 +393,9 @@ void PropertyEditorPanel::buildEmptyState()
     m_visCheck   = nullptr;
     m_layerCombo = nullptr;
 
+    m_scroll->setWidget(nullptr);
+    if (m_container) { delete m_container; m_container = nullptr; }
+
     auto* placeholder = new QLabel(tr("Nothing to show"), m_scroll);
     placeholder->setAlignment(Qt::AlignCenter);
     placeholder->setStyleSheet("color:#555555; font-size:12px;");
@@ -399,7 +403,7 @@ void PropertyEditorPanel::buildEmptyState()
     m_container = placeholder;
 }
 
-// ─── 创建带彩色轴标签的三轴 SpinBox 行 ─────────────────────
+// ─── 创建带彩色轴标签的三轴 SafeSpinBox 行 ──────────────────
 PropertyEditorPanel::Vec3Widgets
 PropertyEditorPanel::makeVec3Row(QFormLayout* form,
                                   const QString& label,
@@ -409,24 +413,22 @@ PropertyEditorPanel::makeVec3Row(QFormLayout* form,
     auto* row = new QHBoxLayout;
     row->setSpacing(2);
 
-    const QString axes[3]   = { "X", "Y", "Z" };
+    const QString axes[3]    = { "X", "Y", "Z" };
     const QString objNames[3] = { "axisX", "axisY", "axisZ" };
-    QDoubleSpinBox* spins[3] = {};
+    SafeSpinBox* spins[3]    = {};
 
     for (int a = 0; a < 3; ++a) {
-        // 彩色前缀标签
         auto* lbl = new QLabel(axes[a]);
         lbl->setObjectName(objNames[a]);
         lbl->setFixedWidth(12);
         lbl->setAlignment(Qt::AlignCenter);
         row->addWidget(lbl);
 
-        auto* spin = new QDoubleSpinBox;
+        auto* spin = new SafeSpinBox;
         spin->setRange(rangeMin, rangeMax);
         spin->setSingleStep(step);
         spin->setDecimals(3);
         spin->setFixedWidth(72);
-        spin->setButtonSymbols(QAbstractSpinBox::NoButtons);
         spin->setValue(a == 0 ? value.x() : a == 1 ? value.y() : value.z());
         row->addWidget(spin);
         spins[a] = spin;
@@ -439,7 +441,14 @@ PropertyEditorPanel::makeVec3Row(QFormLayout* form,
 // ─── 填充/重建属性表单 ────────────────────────────────────────
 void PropertyEditorPanel::rebuildForm(const QString& name, const ObjectProps& props)
 {
-    if (m_container) { m_container->deleteLater(); m_container = nullptr; }
+    // 先断开旧容器与 ScrollArea 的连接，再安全销毁
+    m_scroll->setWidget(nullptr);   // 解除所有权引用
+    if (m_container) {
+        delete m_container;         // 立即删除（不用 deleteLater）
+        m_container = nullptr;
+    }
+
+    // 清空控件指针
     m_spPX = m_spPY = m_spPZ = nullptr;
     m_spRX = m_spRY = m_spRZ = nullptr;
     m_spSX = m_spSY = m_spSZ = nullptr;
@@ -497,10 +506,21 @@ void PropertyEditorPanel::rebuildForm(const QString& name, const ObjectProps& pr
     m_container = container;
     m_scroll->setWidget(container);
 
+    // ── 注入 Tab 列表 ─────────────────────────────────────────
+    m_tabGroup = std::make_shared<SafeSpinBox::TabGroup>(
+        SafeSpinBox::TabGroup{
+            m_spPX, m_spPY, m_spPZ,
+            m_spRX, m_spRY, m_spRZ,
+            m_spSX, m_spSY, m_spSZ
+        });
+    for (auto* sp : *m_tabGroup)
+        sp->setTabGroup(m_tabGroup);
+
     // ── 连接所有控件 → applyToViewport ───────────────────
-    // (使用 lambda 捕获 this，ValueChanged 系列)
-    auto connectSpin = [&](QDoubleSpinBox* sp) {
-        connect(sp, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+    // SafeSpinBox::commitValue 只在 Enter/Tab/失焦时发射，
+    // 不存在中间状态触发，彻底解决键盘输入崩溃
+    auto connectSpin = [&](SafeSpinBox* sp) {
+        connect(sp, &SafeSpinBox::commitValue,
                 this, [this](double) { if (!m_updating) applyToViewport(); });
     };
     for (auto* sp : { m_spPX, m_spPY, m_spPZ,
@@ -517,32 +537,37 @@ void PropertyEditorPanel::rebuildForm(const QString& name, const ObjectProps& pr
 
 void PropertyEditorPanel::inspectNode(const QString& nodeName)
 {
+    // 防止 rebuildForm 触发 applyToViewport 时 m_viewport 还在更新
+    m_updating = true;
     m_currentNode = nodeName;
     m_titleLabel->setText(nodeName);
 
-    // 有绑定 Viewport 且能读到属性 → 填充真实数据
+    ObjectProps props;
+    bool found = false;
     if (m_viewport) {
-        ObjectProps props;
-        if (m_viewport->getObjectProps(nodeName, props)) {
-            rebuildForm(nodeName, props);
-            return;
-        }
+        found = m_viewport->getObjectProps(nodeName, props);
+    }
+    if (!found) {
+        props.position = {0,0,0};
+        props.rotation = {0,0,0};
+        props.scale    = {1,1,1};
+        props.visible  = true;
+        props.layer    = 0;
     }
 
-    // 没有绑定或找不到 → 用默认值显示占位表单
-    ObjectProps defaults;
-    defaults.position = {0,0,0};
-    defaults.rotation = {0,0,0};
-    defaults.scale    = {1,1,1};
-    defaults.visible  = true;
-    defaults.layer    = 0;
-    rebuildForm(nodeName, defaults);
+    rebuildForm(nodeName, props);
+    m_updating = false;
 }
 
 void PropertyEditorPanel::applyToViewport()
 {
-    if (!m_viewport || m_currentNode.isEmpty()) return;
-    if (!m_spPX) return;   // 控件尚未建立
+    // 全套空指针 + 状态检查，任何一项不满足都安全退出
+    if (m_updating)                    return;
+    if (!m_viewport)                   return;
+    if (m_currentNode.isEmpty())       return;
+    if (!m_spPX || !m_spPY || !m_spPZ) return;
+    if (!m_spRX || !m_spRY || !m_spRZ) return;
+    if (!m_spSX || !m_spSY || !m_spSZ) return;
 
     ObjectProps props;
     props.position = { (float)m_spPX->value(),
@@ -554,8 +579,13 @@ void PropertyEditorPanel::applyToViewport()
     props.scale    = { (float)m_spSX->value(),
                        (float)m_spSY->value(),
                        (float)m_spSZ->value() };
-    props.visible  = m_visCheck   ? m_visCheck->isChecked()           : true;
-    props.layer    = m_layerCombo ? m_layerCombo->currentIndex()      : 0;
+    props.visible  = m_visCheck   ? m_visCheck->isChecked()      : true;
+    props.layer    = m_layerCombo ? m_layerCombo->currentIndex() : 0;
+
+    // scale 不能为零，做最小值保护
+    props.scale.setX(qMax(0.0001f, props.scale.x()));
+    props.scale.setY(qMax(0.0001f, props.scale.y()));
+    props.scale.setZ(qMax(0.0001f, props.scale.z()));
 
     m_viewport->setObjectProps(m_currentNode, props);
     emit propsChanged(m_currentNode);
