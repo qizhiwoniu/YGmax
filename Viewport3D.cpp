@@ -551,6 +551,9 @@ void Viewport3D::finalizeAdd(std::unique_ptr<SceneObject>   obj,
 {
     ObjectKind kind = obj->kind;
     QString    name = obj->name;
+    // ── 保存 CPU 端缓存，供 SceneRunnerWidget 跨 context 重新上传 ──
+    obj->vertices = verts;
+    obj->indices  = indices;
     uploadObject(*obj, verts, indices);
     m_objects.push_back(std::move(obj));
     m_statsLabel->setText(QString("%1 object(s)").arg(m_objects.size()));
