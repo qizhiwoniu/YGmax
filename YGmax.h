@@ -21,8 +21,10 @@
 #include "BottomPanel.h"
 #include "RightPanel.h"
 #include "Viewport3D.h"
+#include "SceneSerializer.h"   // ← 新增：SceneSnapshot / SerializeError
 
 class SceneRunnerWidget;
+
 class YGmax : public QWidget
 {
     Q_OBJECT
@@ -41,6 +43,7 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+    // ── 布局 / 初始化 ─────────────────────────────────────────
     void setupMenuBar();
     void setupTray();
     void setupDockHost();
@@ -48,8 +51,27 @@ private:
     void saveLayout();
     void restoreLayout();
 
-    // ── 无边框窗口缩放 ───────────────────────────────────────
-    static const int kEdge = 6;   // 感应边缘宽度（px）
+    // ── 文件操作 ──────────────────────────────────────────────
+    /// Ctrl+S 统一入口：根据当前 Tab 类型自动分发
+    void quickSave();
+
+    /// 保存场景 (.ygx)；saveAs=false 时复用已有路径（快速保存）
+    void saveScene(bool saveAs = false);
+
+    /// 打开场景文件 (.ygx)
+    void openScene();
+
+    /// 保存 Lua 脚本 (.lvl)；saveAs=false 时复用已有路径
+    void saveLuaScript(bool saveAs = false);
+
+    /// 打开 Lua 脚本 (.lvl)
+    void openLuaScript();
+
+    /// 统一"打开"对话框，按扩展名分发给 openScene / openLuaScript
+    void openFile();
+
+    // ── 无边框窗口缩放 ────────────────────────────────────────
+    static const int kEdge = 6;
 
     enum ResizeDir {
         None = 0,
@@ -63,27 +85,33 @@ private:
     ResizeDir hitTest(const QPoint& pos) const;
     void      updateCursor(ResizeDir dir);
 
-    bool       m_resizing    = false;
-    ResizeDir  m_resizeDir   = None;
-    QPoint     m_resizeStart;      // 全局坐标，拖拽起点
-    QRect      m_resizeOrigGeom;   // 拖拽起点时的窗口几何
+    bool       m_resizing      = false;
+    ResizeDir  m_resizeDir     = None;
+    QPoint     m_resizeStart;
+    QRect      m_resizeOrigGeom;
+
     SceneRunnerWidget* m_inlineRunner = nullptr;
-    // ── lua编辑器 ──────────────────────────────
-    QStackedWidget* m_stack         = nullptr;
-    QPlainTextEdit* m_textEditor    = nullptr;
-    // ── 顶部固定区域 ─────────────────────────────────────────
-    QAction*        m_newDocAct     = nullptr;
-    QAction*        m_newLua        = nullptr;
-    CustomTitleBar* m_titleBar      = nullptr;
-    ToolBar*        m_toolBar       = nullptr;
-    DocumentTabBar* m_tabBar        = nullptr;
-    SystemTrayIcon* m_tray          = nullptr;
 
-    // ── 内嵌 QMainWindow，负责所有可停靠面板 ─────────────────
-    QMainWindow*    m_dockHost      = nullptr;
-    Viewport3D*     m_viewport      = nullptr;  // 3-D Viewport (centralWidget)
+    // ── 文件路径状态 ──────────────────────────────────────────
+    QString m_currentScenePath;   ///< 当前场景的磁盘路径（空=未保存）
+    QString m_currentLuaPath;     ///< 当前 Lua 脚本的磁盘路径（空=未保存）
 
-    // ── 底部面板 Dock ────────────────────────────────────────
+    // ── 顶部固定区域 ──────────────────────────────────────────
+    QStackedWidget* m_stack      = nullptr;
+    QPlainTextEdit* m_textEditor = nullptr;
+
+    QAction*        m_newDocAct  = nullptr;
+    QAction*        m_newLua     = nullptr;
+    CustomTitleBar* m_titleBar   = nullptr;
+    ToolBar*        m_toolBar    = nullptr;
+    DocumentTabBar* m_tabBar     = nullptr;
+    SystemTrayIcon* m_tray       = nullptr;
+
+    // ── 内嵌 QMainWindow ──────────────────────────────────────
+    QMainWindow* m_dockHost  = nullptr;
+    Viewport3D*  m_viewport  = nullptr;
+
+    // ── 底部 Dock ─────────────────────────────────────────────
     QDockWidget*       m_dockAsset   = nullptr;
     QDockWidget*       m_dockLog     = nullptr;
     QDockWidget*       m_dockPreview = nullptr;
@@ -92,12 +120,12 @@ private:
     LogConsolePanel*   m_logPanel     = nullptr;
     AssetPreviewPanel* m_previewPanel = nullptr;
 
-    // ── 右侧面板 Dock ────────────────────────────────────────
-    QDockWidget*        m_dockExplorer    = nullptr;  // Explorer + Create (tabbed)
-    QDockWidget*        m_dockCreate      = nullptr;
-    QDockWidget*        m_dockProperty    = nullptr;  // Property Editor
+    // ── 右侧 Dock ─────────────────────────────────────────────
+    QDockWidget*         m_dockExplorer  = nullptr;
+    QDockWidget*         m_dockCreate    = nullptr;
+    QDockWidget*         m_dockProperty  = nullptr;
 
-    ExplorerPanel*      m_explorerPanel   = nullptr;
-    CreatePanel*        m_createPanel     = nullptr;
+    ExplorerPanel*       m_explorerPanel  = nullptr;
+    CreatePanel*         m_createPanel    = nullptr;
     PropertyEditorPanel* m_propertyPanel  = nullptr;
 };

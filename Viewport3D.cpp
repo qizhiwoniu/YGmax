@@ -37,6 +37,80 @@ void main()
 )GLSL";
 
 // ═══════════════════════════════════════════════════════════════
+//  撤销系统（pushUndo / undo）
+// ═══════════════════════════════════════════════════════════════
+void Viewport3D::pushUndo(UndoRecord r)
+{
+    m_undoStack.push_back(std::move(r));
+    if ((int)m_undoStack.size() > kMaxUndo)
+        m_undoStack.erase(m_undoStack.begin());
+}
+
+void Viewport3D::undo()
+{
+    if (m_undoStack.empty()) return;
+    UndoRecord rec = std::move(m_undoStack.back());
+    m_undoStack.pop_back();
+
+    if (rec.type == UndoType::TransformChange) {
+        // 撤销 Gizmo 变换：还原 position / rotation / scale
+        for (auto& obj : m_objects) {
+            if (obj->name == rec.name) {
+                obj->position = rec.oldPos;
+                obj->rotation = rec.oldRot;
+                obj->scale    = rec.oldSca;
+                emit objectPropsChanged(rec.name);
+                break;
+            }
+        }
+
+    } else if (rec.type == UndoType::ObjectAdded) {
+        // 撤销"添加"→ 删除该对象
+        for (int i = 0; i < (int)m_objects.size(); ++i) {
+            if (m_objects[i]->name == rec.name) {
+                makeCurrent();
+                m_objects[i]->vao.destroy();
+                m_objects[i]->vbo.destroy();
+                m_objects[i]->ebo.destroy();
+                m_objects.erase(m_objects.begin() + i);
+                if (m_selectedIdx == i)     m_selectedIdx = -1;
+                else if (m_selectedIdx > i) m_selectedIdx--;
+                m_statsLabel->setText(QString("%1 object(s)").arg(m_objects.size()));
+                doneCurrent();
+                emit objectRemoved(rec.name);
+                break;
+            }
+        }
+
+    } else if (rec.type == UndoType::ObjectDeleted) {
+        // 撤销"删除"→ 重建对象并插回原位置
+        // SceneObject 含 OpenGL 资源，不可拷贝，用快照数据重建
+        auto obj       = std::make_unique<SceneObject>();
+        obj->name      = rec.objSnapshot.name;
+        obj->kind      = rec.objSnapshot.kind;
+        obj->position  = rec.objSnapshot.position;
+        obj->rotation  = rec.objSnapshot.rotation;
+        obj->scale     = rec.objSnapshot.scale;
+        obj->color     = rec.objSnapshot.color;
+        obj->visible   = rec.objSnapshot.visible;
+        obj->layer     = rec.objSnapshot.layer;
+        obj->vertices  = rec.vertices;
+        obj->indices   = rec.indices;
+
+        int insertAt = qBound(0, rec.insertIdx, (int)m_objects.size());
+        uploadObject(*obj, rec.vertices, rec.indices);
+        ObjectKind kind = obj->kind;
+        QString    name = obj->name;
+        m_objects.insert(m_objects.begin() + insertAt, std::move(obj));
+        if (m_selectedIdx >= insertAt) m_selectedIdx++;
+        m_statsLabel->setText(QString("%1 object(s)").arg(m_objects.size()));
+        emit objectAdded(name, kind);
+    }
+
+    update();
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  OrbitCamera
 // ═══════════════════════════════════════════════════════════════
 QVector3D OrbitCamera::position() const
@@ -557,6 +631,11 @@ void Viewport3D::finalizeAdd(std::unique_ptr<SceneObject>   obj,
     uploadObject(*obj, verts, indices);
     m_objects.push_back(std::move(obj));
     m_statsLabel->setText(QString("%1 object(s)").arg(m_objects.size()));
+    // ── 记录撤销：添加对象 ──────────────────────────────────────
+    UndoRecord r;
+    r.type = UndoType::ObjectAdded;
+    r.name = name;
+    pushUndo(std::move(r));
     emit objectAdded(name, kind);
     update();
 }
@@ -682,8 +761,10 @@ void Viewport3D::mousePressEvent(QMouseEvent* e)
 {
     m_lastMouse = e->pos();
     if (e->button() == Qt::MiddleButton) {
-        m_rotating = !(e->modifiers() & Qt::ShiftModifier);
-        m_panning  =  (e->modifiers() & Qt::ShiftModifier);
+        bool pan = (e->modifiers() & Qt::ShiftModifier) ||
+                   (e->modifiers() & Qt::AltModifier);
+        m_rotating = !pan;
+        m_panning  =  pan;
         e->accept(); return;
     }
     if (e->button() == Qt::RightButton) {
@@ -755,6 +836,22 @@ void Viewport3D::mouseReleaseEvent(QMouseEvent* e)
     m_panning       = false;
     if (m_gizmoDragging) {
         m_gizmoDragging = false;
+        // 拖拽结束：若变换确实发生，压入撤销栈
+        if (m_selectedIdx >= 0) {
+            auto& obj = *m_objects[m_selectedIdx];
+            if (obj.position != m_gizmoDragOrigPos ||
+                obj.rotation != m_gizmoDragOrigRot ||
+                obj.scale    != m_gizmoDragOrigSca)
+            {
+                UndoRecord r;
+                r.type   = UndoType::TransformChange;
+                r.name   = obj.name;
+                r.oldPos = m_gizmoDragOrigPos;
+                r.oldRot = m_gizmoDragOrigRot;
+                r.oldSca = m_gizmoDragOrigSca;
+                pushUndo(std::move(r));
+            }
+        }
         // 保留 m_gizmoAxis 用于悬停高亮（移动鼠标会重新检测）
     }
 }
@@ -769,6 +866,12 @@ void Viewport3D::wheelEvent(QWheelEvent* e)
 
 void Viewport3D::keyPressEvent(QKeyEvent* e)
 {
+    // ── Ctrl+Z 撤销 ───────────────────────────────────────────
+    if (e->key() == Qt::Key_Z && (e->modifiers() & Qt::ControlModifier)) {
+        undo();
+        e->accept(); return;
+    }
+
     // ── Gizmo 模式切换 (3ds Max 风格) ─────────────────────────
     if (e->key() == Qt::Key_W) {
         m_gizmoMode = GizmoMode::Move;
@@ -802,6 +905,26 @@ void Viewport3D::keyPressEvent(QKeyEvent* e)
     }
     if (e->key() == Qt::Key_Delete && m_selectedIdx >= 0) {
         makeCurrent();
+        // ── 记录撤销：删除对象 ──────────────────────────────────
+        {
+            auto& src = *m_objects[m_selectedIdx];
+            UndoRecord r;
+            r.type             = UndoType::ObjectDeleted;
+            r.name             = src.name;
+            r.insertIdx        = m_selectedIdx;
+            r.vertices         = src.vertices;
+            r.indices          = src.indices;
+            // 保存属性快照（不含 OpenGL 资源）
+            r.objSnapshot.name     = src.name;
+            r.objSnapshot.kind     = src.kind;
+            r.objSnapshot.position = src.position;
+            r.objSnapshot.rotation = src.rotation;
+            r.objSnapshot.scale    = src.scale;
+            r.objSnapshot.color    = src.color;
+            r.objSnapshot.visible  = src.visible;
+            r.objSnapshot.layer    = src.layer;
+            pushUndo(std::move(r));
+        }
         QString removedName = m_objects[m_selectedIdx]->name;
         m_objects[m_selectedIdx]->vao.destroy();
         m_objects[m_selectedIdx]->vbo.destroy();

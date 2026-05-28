@@ -110,6 +110,7 @@
     <QtMoc Include="BottomPanel.h" />
     <QtMoc Include="SceneRunnerWidget.h" />
     <QtMoc Include="RightPanel.h" />
+    <ClInclude Include="SceneSerializer.h" />
     <ClInclude Include="SceneShaders.h" />
     <QtMoc Include="SettingsDialog.h" />
     <ClInclude Include="version.h" />
@@ -121,10 +122,12 @@
     <ClCompile Include="DocumentTabBar.cpp" />
     <ClCompile Include="RightPanel.cpp" />
     <ClCompile Include="SceneRunnerWidget.cpp" />
+    <ClCompile Include="SceneSerializer.cpp" />
     <ClCompile Include="SettingsDialog.cpp" />
     <ClCompile Include="SystemTrayIcon.cpp" />
     <ClCompile Include="ToolBar.cpp" />
     <ClCompile Include="Viewport3D.cpp" />
+    <ClCompile Include="Viewport3D_Snapshot.cpp" />
     <ClCompile Include="YGmax.cpp" />
     <ClCompile Include="main.cpp" />
     <None Include="YGmax.ico" />

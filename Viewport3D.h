@@ -7,8 +7,8 @@
 //
 //  工具栏：视角选择 | Full Render / Wireframe
 //  场景  ：addBox / addSphere / addPlane / addCylinder / addCone
-//  摄像机：中键旋转 | Shift+中键平移 | 滚轮缩放
-//  快捷键：F 聚焦选中 | Delete 删除选中
+//  摄像机：中键旋转 | Shift+中键平移 | Alt+中键平移 | 滚轮缩放
+//  快捷键：F 聚焦选中 | Delete 删除选中 | Ctrl+Z 撤销
 //
 //  坐标原点：网格 XZ 平面交点 = 世界坐标 (0, 0, 0)
 //            Y 轴向上，X 轴向右（红），Z 轴向前（蓝）
@@ -33,7 +33,7 @@
 #include <QMimeData>
 #include <vector>
 #include <memory>
-
+#include "SceneSerializer.h"
 // ───────────────────────────────────────────────────────────────
 //  渲染模式
 // ───────────────────────────────────────────────────────────────
@@ -171,7 +171,8 @@ public:
     {
         return m_objects;
     }
-
+    SceneSnapshot takeSnapshot() const;
+    void          loadSnapshot(const SceneSnapshot& snap);
 signals:
     /// name = 物体名称，kind = 种类（用于 Explorer 分组）
     void objectAdded   (const QString& name, ObjectKind kind);
@@ -185,6 +186,8 @@ signals:
 public slots:
     /// 由 Explorer 的 deleteRequested 信号触发，按名称删除物体
     void deleteObjectByName(const QString& name);
+    /// 撤销上一步操作（供菜单 Action 直接连接）
+    void undo();
 
 protected:
     void initializeGL()            override;
@@ -296,4 +299,36 @@ private:
                              const QVector3D& col, float len, bool scaleCube);
     static void buildRing  (std::vector<float>& v, const QVector3D& axis,
                              const QVector3D& col, float r, int segs = 48);
+
+    // ── 撤销系统 ──────────────────────────────────────────────
+    enum class UndoType { TransformChange, ObjectAdded, ObjectDeleted };
+
+    // ObjectDeleted 时需要保存对象属性快照（不含 OpenGL 资源）
+    struct ObjectSnapshot {
+        QString    name;
+        ObjectKind kind     = ObjectKind::Mesh;
+        QVector3D  position { 0, 0, 0 };
+        QVector3D  rotation { 0, 0, 0 };
+        QVector3D  scale    { 1, 1, 1 };
+        QColor     color    { 180, 140, 80 };
+        bool       visible  = true;
+        int        layer    = 0;
+    };
+
+    struct UndoRecord {
+        UndoType   type;
+        QString    name;
+        // TransformChange
+        QVector3D  oldPos, oldRot, oldSca;
+        // ObjectDeleted
+        ObjectSnapshot        objSnapshot;
+        std::vector<float>    vertices;
+        std::vector<uint32_t> indices;
+        int                   insertIdx = -1;
+    };
+
+    static constexpr int kMaxUndo = 50;
+    std::vector<UndoRecord> m_undoStack;
+
+    void pushUndo(UndoRecord r);
 };

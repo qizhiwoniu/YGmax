@@ -9,8 +9,16 @@
 #include "Viewport3D.h"
 #include "SettingsDialog.h"
 #include "SceneRunnerWidget.h"
+#include "SceneSerializer.h"
 #include <QCloseEvent>
+#include <QFileDialog>
+#include <QMessageBox>
+#include <QShortcut>
+#include <QFileInfo>
 
+// ═══════════════════════════════════════════════════════════════
+//  构造函数
+// ═══════════════════════════════════════════════════════════════
 YGmax::YGmax(QWidget* parent)
     : QWidget(parent)
 {
@@ -47,29 +55,9 @@ YGmax::YGmax(QWidget* parent)
     // ── 工具栏 ───────────────────────────────────────────────
     connect(m_toolBar, &ToolBar::selectModeActivated,  this, []() {});
     connect(m_toolBar, &ToolBar::defaultModeActivated, this, []() {});
-    //connect(m_toolBar, &ToolBar::actionTriggered,      this, [](int id) { Q_UNUSED(id) });
     connect(m_toolBar, &ToolBar::actionTriggered, this, [this](int id) {
-        // ── ID 4：在主窗口内嵌运行场景 ──────────────────────────
-        if (id == 4) {
-            // 如果已有内嵌 runner 则停止并销毁
-            if (m_inlineRunner) {
-                m_inlineRunner->stop();
-                m_stack->removeWidget(m_inlineRunner);
-                delete m_inlineRunner;
-                m_inlineRunner = nullptr;
-                // 恢复回 Viewport 视图
-                m_stack->setCurrentWidget(m_viewport);
-                return;  // 第二次点击 = 停止
-            }
-            // 拍快照：把当前场景对象传给 runner
-            m_inlineRunner = new SceneRunnerWidget(
-                m_viewport->sceneObjects(), m_stack);  // ← 见下方说明
-            m_stack->addWidget(m_inlineRunner);
-            m_stack->setCurrentWidget(m_inlineRunner);
-            m_inlineRunner->setFocus();
-        }
 
-        // ── ID 3：独立窗口运行场景 ──────────────────────────────
+        // ── ID 3：独立窗口运行场景 ──────────────────────────
         if (id == 3) {
             auto* win = new QWidget(nullptr,
                 Qt::Window | Qt::WindowCloseButtonHint);
@@ -85,22 +73,48 @@ YGmax::YGmax(QWidget* parent)
             lay->addWidget(runner);
             win->setLayout(lay);
 
-            // 窗口关闭时停止 GL 定时器，防止在析构前继续渲染
             connect(win, &QWidget::destroyed, runner,
                 [runner]() { runner->stop(); });
 
             win->show();
         }
-        // ── ID 5：设置窗口 ──────────────────────────────────────
-        if (id == 5) {
-        SettingsDialog dlg(this);
-        // 手柄映射是第 4 个 Tab（index 3）
-        if (auto* tabs = dlg.findChild<QTabWidget*>())
-            tabs->setCurrentIndex(3);
-        dlg.exec();
+
+        // ── ID 4：内嵌运行场景 ──────────────────────────────
+        if (id == 4) {
+            if (m_inlineRunner) {
+                m_inlineRunner->stop();
+                m_stack->removeWidget(m_inlineRunner);
+                delete m_inlineRunner;
+                m_inlineRunner = nullptr;
+                m_stack->setCurrentWidget(m_viewport);
+                return;
+            }
+            m_inlineRunner = new SceneRunnerWidget(
+                m_viewport->sceneObjects(), m_stack);
+            m_stack->addWidget(m_inlineRunner);
+            m_stack->setCurrentWidget(m_inlineRunner);
+            m_inlineRunner->setFocus();
         }
-        });
-    
+
+        // ── ID 5：手柄映射设置 ──────────────────────────────
+        if (id == 5) {
+            SettingsDialog dlg(this);
+            if (auto* tabs = dlg.findChild<QTabWidget*>())
+                tabs->setCurrentIndex(3);
+            dlg.exec();
+        }
+
+        // ── ID 8：💾 快速保存 ────────────────────────────────
+        if (id == 8) {
+            quickSave();
+        }
+
+        // ── ID 9：撤销 ──────────────────────────────────────
+        if (id == 9) {
+            m_viewport->undo();
+        }
+    });
+
     // ── 文档标签 ─────────────────────────────────────────────
     connect(m_tabBar, &DocumentTabBar::newTabRequested,
             m_newDocAct, &QAction::trigger);
@@ -115,7 +129,7 @@ YGmax::YGmax(QWidget* parent)
         if (index < 0) return;
         int kind = m_tabBar->tabData(index);
         m_stack->setCurrentWidget(kind == 1 ? (QWidget*)m_textEditor
-                                             : (QWidget*)m_viewport);
+                                            : (QWidget*)m_viewport);
     });
 
     // ── Explorer 选中 → Property Editor ──────────────────────
@@ -123,13 +137,10 @@ YGmax::YGmax(QWidget* parent)
             m_propertyPanel, &PropertyEditorPanel::inspectNode);
 
     // ── Viewport → Explorer 同步 ─────────────────────────────
-    // objectAdded 现在带 ObjectKind，Explorer 按 kind 分组
     connect(m_viewport, &Viewport3D::objectAdded,
             m_explorerPanel, &ExplorerPanel::addNode);
-
     connect(m_viewport, &Viewport3D::objectRemoved,
             m_explorerPanel, &ExplorerPanel::removeNode);
-
     connect(m_viewport, &Viewport3D::sceneCleared,
             m_explorerPanel, &ExplorerPanel::clearNodes);
 
@@ -137,11 +148,11 @@ YGmax::YGmax(QWidget* parent)
     connect(m_explorerPanel, &ExplorerPanel::deleteRequested,
             m_viewport, &Viewport3D::deleteObjectByName);
 
-    // Viewport 点击选中 → Property Editor（直接从 Viewport 选中时也更新）
+    // Viewport 点击选中 → Property Editor
     connect(m_viewport, &Viewport3D::objectSelected,
             m_propertyPanel, &PropertyEditorPanel::inspectNode);
 
-    // ── CreatePanel 点击 → Viewport 在世界原点创建 ──────────
+    // ── CreatePanel 点击 → Viewport ──────────────────────────
     connect(m_createPanel, &CreatePanel::createPrimitive,
             this, [this](const QString& type) {
         static int n = 1;
@@ -151,8 +162,13 @@ YGmax::YGmax(QWidget* parent)
         else if (type == "Cylinder")  m_viewport->addCylinder(name);
         else if (type == "Cone")      m_viewport->addCone    (name);
         else if (type == "Plane")     m_viewport->addPlane   (name);
-        else /* lights / camera */    m_viewport->addLight   (name);
+        else                          m_viewport->addLight   (name);
     });
+
+    // ── Ctrl+S 全局快捷键（ApplicationShortcut 保证任意焦点下触发）
+    auto* saveShortcut = new QShortcut(QKeySequence::Save, this);
+    saveShortcut->setContext(Qt::ApplicationShortcut);
+    connect(saveShortcut, &QShortcut::activated, this, &YGmax::quickSave);
 
     restoreLayout();
     m_newDocAct->trigger();
@@ -162,9 +178,211 @@ YGmax::YGmax(QWidget* parent)
 
 YGmax::~YGmax() {}
 
-// ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+//  文件操作
+// ═══════════════════════════════════════════════════════════════
+
+// ── 辅助：当前 Tab 是否为 Lua 脚本 ─────────────────────────
+static bool tabIsLua(DocumentTabBar* bar)
+{
+    int idx = bar->currentIndex();
+    return idx >= 0 && bar->tabData(idx) == 1;
+}
+
+// ── Ctrl+S 统一入口 ──────────────────────────────────────────
+void YGmax::quickSave()
+{
+    if (tabIsLua(m_tabBar))
+        saveLuaScript(false);
+    else
+        saveScene(false);
+}
+
+// ── 保存场景 (.ygx) ──────────────────────────────────────────
+void YGmax::saveScene(bool saveAs)
+{
+    QString path = m_currentScenePath;
+
+    if (saveAs || path.isEmpty()) {
+        path = QFileDialog::getSaveFileName(
+            this,
+            tr("保存场景"),
+            path.isEmpty() ? tr("未命名场景") : path,
+            tr("YGmax 场景 (*.ygx);;所有文件 (*.*)"));
+    }
+    if (path.isEmpty()) return;
+
+    if (!path.endsWith(".ygx", Qt::CaseInsensitive))
+        path += ".ygx";
+
+    SceneSnapshot snap = m_viewport->takeSnapshot();
+    SerializeError err = SceneSerializer::saveScene(path, snap);
+
+    if (err != SerializeError::None) {
+        QMessageBox::critical(this, tr("保存失败"),
+            tr("无法保存场景：\n%1\n\n%2")
+                .arg(path)
+                .arg(SceneSerializer::errorString(err)));
+        return;
+    }
+
+    m_currentScenePath = path;
+
+    // 同步标签页标题
+    int tabIdx = m_tabBar->currentIndex();
+    if (tabIdx >= 0)
+        m_tabBar->setTabText(tabIdx, QFileInfo(path).baseName());
+
+    m_logPanel->appendLog(
+        tr("[场景] 已保存：%1  (%2 个对象)")
+            .arg(path).arg(snap.objects.size()));
+}
+
+// ── 打开场景 (.ygx) ──────────────────────────────────────────
+void YGmax::openScene()
+{
+    QString path = QFileDialog::getOpenFileName(
+        this,
+        tr("打开场景"),
+        QString(),
+        tr("YGmax 场景 (*.ygx);;所有文件 (*.*)"));
+    if (path.isEmpty()) return;
+
+    SceneSnapshot snap;
+    SerializeError err = SceneSerializer::loadScene(path, snap);
+
+    if (err != SerializeError::None) {
+        QMessageBox::critical(this, tr("打开失败"),
+            tr("无法读取场景文件：\n%1\n\n%2")
+                .arg(path)
+                .arg(SceneSerializer::errorString(err)));
+        return;
+    }
+
+    // 找到或新建 3D 视口 Tab
+    int sceneTab = -1;
+    for (int i = 0; i < m_tabBar->count(); ++i) {
+        if (m_tabBar->tabData(i) == 0) { sceneTab = i; break; }
+    }
+    if (sceneTab < 0) {
+        m_tabBar->setFixedHeight(34);
+        sceneTab = m_tabBar->addTab("");
+        m_tabBar->setTabData(sceneTab, 0);
+        m_tabBar->show();
+    }
+    m_tabBar->setCurrentIndex(sceneTab);
+    m_stack->setCurrentWidget(m_viewport);
+
+    // 加载快照（clearScene + 重建 GPU 资源 + 通知 Explorer）
+    m_viewport->loadSnapshot(snap);
+
+    m_currentScenePath = path;
+    m_tabBar->setTabText(sceneTab, QFileInfo(path).baseName());
+
+    m_logPanel->appendLog(
+        tr("[场景] 已打开：%1  (%2 个对象)")
+            .arg(path).arg(snap.objects.size()));
+}
+
+// ── 保存 Lua 脚本 (.lvl) ─────────────────────────────────────
+void YGmax::saveLuaScript(bool saveAs)
+{
+    QString path = m_currentLuaPath;
+
+    if (saveAs || path.isEmpty()) {
+        path = QFileDialog::getSaveFileName(
+            this,
+            tr("保存 Lua 脚本"),
+            path.isEmpty() ? tr("未命名脚本") : path,
+            tr("YGmax Lua 脚本 (*.lvl);;所有文件 (*.*)"));
+    }
+    if (path.isEmpty()) return;
+
+    if (!path.endsWith(".lvl", Qt::CaseInsensitive))
+        path += ".lvl";
+
+    SerializeError err = SceneSerializer::saveLua(
+        path, m_textEditor->toPlainText());
+
+    if (err != SerializeError::None) {
+        QMessageBox::critical(this, tr("保存失败"),
+            tr("无法保存 Lua 脚本：\n%1\n\n%2")
+                .arg(path)
+                .arg(SceneSerializer::errorString(err)));
+        return;
+    }
+
+    m_currentLuaPath = path;
+
+    int tabIdx = m_tabBar->currentIndex();
+    if (tabIdx >= 0)
+        m_tabBar->setTabText(tabIdx, QFileInfo(path).baseName() + ".lvl");
+
+    m_logPanel->appendLog(tr("[Lua] 已保存：%1").arg(path));
+}
+
+// ── 打开 Lua 脚本 (.lvl) ─────────────────────────────────────
+void YGmax::openLuaScript()
+{
+    QString path = QFileDialog::getOpenFileName(
+        this,
+        tr("打开 Lua 脚本"),
+        QString(),
+        tr("YGmax Lua 脚本 (*.lvl);;所有文件 (*.*)"));
+    if (path.isEmpty()) return;
+
+    QString src;
+    SerializeError err = SceneSerializer::loadLua(path, src);
+
+    if (err != SerializeError::None) {
+        QMessageBox::critical(this, tr("打开失败"),
+            tr("无法读取 Lua 脚本：\n%1\n\n%2")
+                .arg(path)
+                .arg(SceneSerializer::errorString(err)));
+        return;
+    }
+
+    // 新建 Lua Tab，加载内容
+    m_tabBar->setFixedHeight(34);
+    QFileInfo fi(path);
+    int idx = m_tabBar->addTab(fi.baseName() + ".lvl");
+    m_tabBar->setTabData(idx, 1);
+    m_tabBar->setCurrentIndex(idx);
+    m_tabBar->show();
+
+    m_stack->setCurrentWidget(m_textEditor);
+    m_textEditor->setPlainText(src);
+
+    m_currentLuaPath = path;
+
+    //m_logPanel->appendLog(tr("[Lua] 已打开：%1").arg(path));
+}
+
+// ── 统一打开对话框（按扩展名分发）────────────────────────────
+void YGmax::openFile()
+{
+    QString path = QFileDialog::getOpenFileName(
+        this,
+        tr("打开文件"),
+        QString(),
+        tr("所有支持的文件 (*.ygx *.lvl);;"
+           "YGmax 场景 (*.ygx);;"
+           "Lua 脚本 (*.lvl);;"
+           "所有文件 (*.*)"));
+    if (path.isEmpty()) return;
+
+    if (path.endsWith(".lvl", Qt::CaseInsensitive))
+        openLuaScript();   // 实际加载路径在函数内由对话框提供
+    else
+        openScene();
+
+    // 注意：上面的函数内部会再次弹出对话框，因此这里改为直接调用
+    // 带路径参数的内部版本，见下方私有辅助函数的说明。
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  内嵌 QMainWindow + 所有 QDockWidget
-// ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
 void YGmax::setupDockHost()
 {
     m_dockHost = new QMainWindow(this);
@@ -181,12 +399,14 @@ void YGmax::setupDockHost()
     m_viewport->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
     m_textEditor = new QPlainTextEdit(m_dockHost);
-    m_textEditor->setPlaceholderText(tr("在此输入文本..."));
+    m_textEditor->setPlaceholderText(tr("在此编写 Lua 脚本..."));
     m_textEditor->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    // Lua 脚本编辑器等宽字体
+    m_textEditor->setFont(QFont("Consolas", 11));
 
     m_stack = new QStackedWidget(m_dockHost);
     m_stack->addWidget(m_viewport);    // index 0 → 3D 视口
-    m_stack->addWidget(m_textEditor);  // index 1 → 文本编辑器
+    m_stack->addWidget(m_textEditor);  // index 1 → Lua 编辑器
     m_stack->setCurrentIndex(0);
 
     m_dockHost->setCentralWidget(m_stack);
@@ -202,13 +422,9 @@ void YGmax::setupDockHost()
     m_explorerPanel = new ExplorerPanel(m_dockHost);
     m_createPanel   = new CreatePanel(m_dockHost);
     m_propertyPanel = new PropertyEditorPanel(m_dockHost);
-
-    // 绑定 Viewport → PropertyEditor 双向数据通道
     m_propertyPanel->bindViewport(m_viewport);
 
-    // ════════════════════════════════════════════════════════
-    //  底部 Dock
-    // ════════════════════════════════════════════════════════
+    // ── 底部 Dock ─────────────────────────────────────────────
     m_dockAsset = new QDockWidget(tr("Asset Browser"), m_dockHost);
     m_dockAsset->setObjectName("dockAssetBrowser");
     m_dockAsset->setAllowedAreas(Qt::AllDockWidgetAreas);
@@ -238,9 +454,7 @@ void YGmax::setupDockHost()
     m_dockPreview->setWidget(m_previewPanel);
     m_dockHost->addDockWidget(Qt::BottomDockWidgetArea, m_dockPreview);
 
-    // ════════════════════════════════════════════════════════
-    //  右侧 Dock
-    // ════════════════════════════════════════════════════════
+    // ── 右侧 Dock ─────────────────────────────────────────────
     m_dockExplorer = new QDockWidget(tr("Explorer"), m_dockHost);
     m_dockExplorer->setObjectName("dockExplorer");
     m_dockExplorer->setAllowedAreas(Qt::AllDockWidgetAreas);
@@ -269,16 +483,14 @@ void YGmax::setupDockHost()
                                  QDockWidget::DockWidgetClosable);
     m_dockProperty->setWidget(m_propertyPanel);
     m_dockHost->addDockWidget(Qt::RightDockWidgetArea, m_dockProperty);
-    // Property Editor 放在 Explorer 下方（splitDockWidget）
-    m_dockHost->splitDockWidget(m_dockExplorer, m_dockProperty,
-                                 Qt::Vertical);
+    m_dockHost->splitDockWidget(m_dockExplorer, m_dockProperty, Qt::Vertical);
 
     applyDockStyle();
 }
 
-// ─────────────────────────────────────────────────────────────
-//  其余成员函数（与原版完全相同，下方直接保留）
-// ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+//  Dock 样式
+// ═══════════════════════════════════════════════════════════════
 void YGmax::applyDockStyle()
 {
     const QString dockQss = R"(
@@ -308,6 +520,208 @@ void YGmax::applyDockStyle()
     m_dockHost->setStyleSheet(dockQss);
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  菜单栏
+// ═══════════════════════════════════════════════════════════════
+void YGmax::setupMenuBar()
+{
+    QMenuBar* mb = m_titleBar->menuBar();
+
+    // ── 文件菜单 ─────────────────────────────────────────────
+    QMenu* fileMenu = mb->addMenu(tr("文件(&F)"));
+
+    // 新建场景
+    m_newDocAct = new QAction(tr("新建场景(&N)"), this);
+    m_newDocAct->setShortcut(QKeySequence::New);
+    connect(m_newDocAct, &QAction::triggered, this, [this]() {
+        m_tabBar->setFixedHeight(34);
+        int idx = m_tabBar->addTab(tr("未命名场景"));
+        m_tabBar->setTabData(idx, 0);
+        m_tabBar->show();
+        m_stack->setCurrentWidget(m_viewport);
+        m_currentScenePath.clear();
+    });
+    fileMenu->addAction(m_newDocAct);
+
+    // 新建 Lua 脚本
+    m_newLua = new QAction(tr("新建 Lua 脚本"), this);
+    connect(m_newLua, &QAction::triggered, this, [this]() {
+        m_tabBar->setFixedHeight(34);
+        int idx = m_tabBar->addTab(tr("未命名脚本.lvl"));
+        m_tabBar->setTabData(idx, 1);
+        m_tabBar->show();
+        m_stack->setCurrentWidget(m_textEditor);
+        m_textEditor->clear();
+        m_currentLuaPath.clear();
+    });
+    fileMenu->addAction(m_newLua);
+
+    fileMenu->addSeparator();
+
+    // 打开（统一入口，支持 .ygx 和 .lvl）
+    QAction* openAct = new QAction(tr("打开(&O)..."), this);
+    openAct->setShortcut(QKeySequence::Open);
+    connect(openAct, &QAction::triggered, this, [this]() {
+        // 一次性对话框，按后缀名分发
+        QString path = QFileDialog::getOpenFileName(
+            this,
+            tr("打开文件"),
+            QString(),
+            tr("所有支持的文件 (*.ygx *.lvl);;"
+               "YGmax 场景 (*.ygx);;"
+               "Lua 脚本 (*.lvl);;"
+               "所有文件 (*.*)"));
+        if (path.isEmpty()) return;
+
+        if (path.endsWith(".lvl", Qt::CaseInsensitive)) {
+            // ── 直接加载 Lua 脚本 ─────────────────────────
+            QString src;
+            SerializeError err = SceneSerializer::loadLua(path, src);
+            if (err != SerializeError::None) {
+                QMessageBox::critical(this, tr("打开失败"),
+                    tr("无法读取 Lua 脚本：\n%1\n\n%2")
+                        .arg(path).arg(SceneSerializer::errorString(err)));
+                return;
+            }
+            m_tabBar->setFixedHeight(34);
+            QFileInfo fi(path);
+            int idx = m_tabBar->addTab(fi.baseName() + ".lvl");
+            m_tabBar->setTabData(idx, 1);
+            m_tabBar->setCurrentIndex(idx);
+            m_tabBar->show();
+            m_stack->setCurrentWidget(m_textEditor);
+            m_textEditor->setPlainText(src);
+            m_currentLuaPath = path;
+            //m_logPanel->appendLog(tr("[Lua] 已打开：%1").arg(path));
+
+        } else {
+            // ── 直接加载场景 ──────────────────────────────
+            SceneSnapshot snap;
+            SerializeError err = SceneSerializer::loadScene(path, snap);
+            if (err != SerializeError::None) {
+                QMessageBox::critical(this, tr("打开失败"),
+                    tr("无法读取场景文件：\n%1\n\n%2")
+                        .arg(path).arg(SceneSerializer::errorString(err)));
+                return;
+            }
+            // 找到或新建 3D 视口 Tab
+            int sceneTab = -1;
+            for (int i = 0; i < m_tabBar->count(); ++i) {
+                if (m_tabBar->tabData(i) == 0) { sceneTab = i; break; }
+            }
+            if (sceneTab < 0) {
+                m_tabBar->setFixedHeight(34);
+                sceneTab = m_tabBar->addTab("");
+                m_tabBar->setTabData(sceneTab, 0);
+                m_tabBar->show();
+            }
+            m_tabBar->setCurrentIndex(sceneTab);
+            m_stack->setCurrentWidget(m_viewport);
+            m_viewport->loadSnapshot(snap);
+            m_currentScenePath = path;
+            m_tabBar->setTabText(sceneTab, QFileInfo(path).baseName());
+            m_logPanel->appendLog(
+                tr("[场景] 已打开：%1  (%2 个对象)")
+                    .arg(path).arg(snap.objects.size()));
+        }
+    });
+    fileMenu->addAction(openAct);
+
+    fileMenu->addSeparator();
+
+    // 保存（Ctrl+S）
+    QAction* saveAct = new QAction(tr("保存(&S)"), this);
+    saveAct->setShortcut(QKeySequence::Save);
+    connect(saveAct, &QAction::triggered, this, &YGmax::quickSave);
+    fileMenu->addAction(saveAct);
+
+    // 另存为（Ctrl+Shift+S）
+    QAction* saveAsAct = new QAction(tr("另存为(&A)..."), this);
+    saveAsAct->setShortcut(QKeySequence::SaveAs);
+    connect(saveAsAct, &QAction::triggered, this, [this]() {
+        if (tabIsLua(m_tabBar))
+            saveLuaScript(true);
+        else
+            saveScene(true);
+    });
+    fileMenu->addAction(saveAsAct);
+
+    fileMenu->addSeparator();
+
+    QAction* quitAct = new QAction(tr("退出(&Q)"), this);
+    quitAct->setShortcut(QKeySequence::Quit);
+    connect(quitAct, &QAction::triggered, this, &QWidget::close);
+    fileMenu->addAction(quitAct);
+
+    // ── 编辑菜单 ─────────────────────────────────────────────
+    QMenu* editMenu = mb->addMenu(tr("编辑(&E)"));
+    QAction* undoAct = new QAction(tr("撤销(&Z)"), this);
+    undoAct->setShortcut(QKeySequence::Undo);
+    connect(undoAct, &QAction::triggered, this, [this]() {
+        m_viewport->undo();
+    });
+    editMenu->addAction(undoAct);
+
+    // ── 视图菜单 ─────────────────────────────────────────────
+    QMenu* viewMenu = mb->addMenu(tr("视图(&V)"));
+
+    auto makeViewAct = [&](const QString& label, QDockWidget* YGmax::* member) {
+        QAction* act = new QAction(label, this);
+        act->setCheckable(true);
+        act->setChecked(true);
+        connect(act, &QAction::toggled, this, [this, member](bool v) {
+            if (QDockWidget* dock = this->*member) dock->setVisible(v);
+        });
+        connect(viewMenu, &QMenu::aboutToShow, this, [this, act, member]() {
+            if (QDockWidget* dock = this->*member) act->setChecked(dock->isVisible());
+        });
+        viewMenu->addAction(act);
+    };
+
+    makeViewAct(tr("Asset Browser"),   &YGmax::m_dockAsset);
+    makeViewAct(tr("Log Console"),     &YGmax::m_dockLog);
+    makeViewAct(tr("Asset Preview"),   &YGmax::m_dockPreview);
+    viewMenu->addSeparator();
+    makeViewAct(tr("Explorer"),        &YGmax::m_dockExplorer);
+    makeViewAct(tr("Create"),          &YGmax::m_dockCreate);
+    makeViewAct(tr("Property Editor"), &YGmax::m_dockProperty);
+
+    // ── 帮助菜单 ─────────────────────────────────────────────
+    QMenu* helpMenu = mb->addMenu(tr("帮助(&H)"));
+    QAction* aboutAct = new QAction(tr("关于"), this);
+    connect(aboutAct, &QAction::triggered, this, [this]() {
+        AboutDialog dlg(this);
+        dlg.exec();
+    });
+    helpMenu->addAction(aboutAct);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  系统托盘
+// ═══════════════════════════════════════════════════════════════
+void YGmax::setupTray()
+{
+    m_tray = new SystemTrayIcon(this, this);
+
+    connect(m_tray, &SystemTrayIcon::showMainWindow, this, [this]() {
+        showNormal();
+        activateWindow();
+        raise();
+    });
+    connect(m_tray, &SystemTrayIcon::checkUpdate, this, [this]() {
+        m_tray->showMessage(
+            QString(VER_PRODUCT_NAME),
+            tr("当前已是最新版本  v%1").arg(VERSION_STR),
+            QSystemTrayIcon::Information,
+            3000);
+    });
+
+    m_tray->show();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  布局保存 / 恢复
+// ═══════════════════════════════════════════════════════════════
 void YGmax::saveLayout()
 {
     QSettings s("Qizhiwoniu", "YGmax");
@@ -324,6 +738,9 @@ void YGmax::restoreLayout()
         m_dockHost->restoreState(s.value("dockState").toByteArray());
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  关闭事件
+// ═══════════════════════════════════════════════════════════════
 void YGmax::closeEvent(QCloseEvent* event)
 {
     saveLayout();
@@ -333,125 +750,12 @@ void YGmax::closeEvent(QCloseEvent* event)
         VER_PRODUCT_NAME,
         tr("程序已最小化到托盘，双击图标可重新打开"),
         QSystemTrayIcon::Information,
-        2000
-    );
-
+        2000);
 }
 
-// ─────────────────────────────────────────────────────────────
-//  菜单栏
-// ─────────────────────────────────────────────────────────────
-void YGmax::setupMenuBar()
-{
-    QMenuBar* mb = m_titleBar->menuBar();
-
-    // 文件
-    QMenu* fileMenu = mb->addMenu(tr("文件(&F)"));
-    m_newDocAct = new QAction(tr("新建"), this);
-    m_newDocAct->setShortcut(QKeySequence::New);
-    connect(m_newDocAct, &QAction::triggered, this, [this]() {
-        m_tabBar->setFixedHeight(34);
-        int idx = m_tabBar->addTab(tr("未命名文档"));
-        m_tabBar->setTabData(idx, 0);  // 0 → 3D 视口
-        m_tabBar->show();
-        m_stack->setCurrentWidget(m_viewport);
-        });
-    fileMenu->addAction(m_newDocAct);
-    m_newLua = new QAction(tr("新建Lua脚本"), this);
-    m_newLua->setShortcut(QKeySequence::New);
-    connect(m_newLua, &QAction::triggered, this, [this]() {
-        m_tabBar->setFixedHeight(34);
-        int idx = m_tabBar->addTab(tr("未命名Lua脚本"));
-        m_tabBar->setTabData(idx, 1);  // 1 → 文本编辑器
-        m_tabBar->show();
-        m_stack->setCurrentWidget(m_textEditor);
-        });
-    fileMenu->addAction(m_newLua);
-
-    QAction* openAct = new QAction(tr("打开"), this);
-    openAct->setShortcut(QKeySequence::Open);
-    fileMenu->addAction(openAct);
-
-    fileMenu->addSeparator();
-
-    QAction* quitAct = new QAction(tr("退出"), this);
-    quitAct->setShortcut(QKeySequence::Quit);
-    connect(quitAct, &QAction::triggered, this, &QWidget::close);
-    fileMenu->addAction(quitAct);
-
-    // 编辑
-    QMenu* editMenu = mb->addMenu(tr("编辑(&E)"));
-    QAction* undoAct = new QAction(tr("撤销"), this);
-    undoAct->setShortcut(QKeySequence::Undo);
-    editMenu->addAction(undoAct);
-
-    // 视图：快速显示/隐藏各面板
-    // 注意：setupMenuBar() 在 setupDockHost() 之前调用，各 m_dock* 此时仍为
-    // nullptr。lambda 必须通过 this 成员指针在触发时才解引用，不能直接捕获。
-    QMenu* viewMenu = mb->addMenu(tr("视图(&V)"));
-
-    // 用成员指针偏移量做延迟绑定：触发时再取实际 dock 指针
-    auto makeViewAct = [&](const QString& label, QDockWidget* YGmax::* member) {
-        QAction* act = new QAction(label, this);
-        act->setCheckable(true);
-        act->setChecked(true);
-        connect(act, &QAction::toggled, this, [this, member](bool v) {
-            if (QDockWidget* dock = this->*member)
-                dock->setVisible(v);
-            });
-        // 打开菜单时同步勾选状态（面板可能被用户手动关闭过）
-        connect(viewMenu, &QMenu::aboutToShow, this, [this, act, member]() {
-            if (QDockWidget* dock = this->*member)
-                act->setChecked(dock->isVisible());
-            });
-        viewMenu->addAction(act);
-        };
-
-    makeViewAct(tr("Asset Browser"), &YGmax::m_dockAsset);
-    makeViewAct(tr("Log Console"), &YGmax::m_dockLog);
-    makeViewAct(tr("Asset Preview"), &YGmax::m_dockPreview);
-    viewMenu->addSeparator();
-    makeViewAct(tr("Explorer"), &YGmax::m_dockExplorer);
-    makeViewAct(tr("Create"), &YGmax::m_dockCreate);
-    makeViewAct(tr("Property Editor"), &YGmax::m_dockProperty);
-
-    // 帮助
-    QMenu* helpMenu = mb->addMenu(tr("帮助(&H)"));
-    QAction* aboutAct = new QAction(tr("关于"), this);
-    connect(aboutAct, &QAction::triggered, this, [this]() {
-        AboutDialog dlg(this);
-        dlg.exec();
-        });
-    helpMenu->addAction(aboutAct);
-}
-
-// ─────────────────────────────────────────────────────────────
-//  系统托盘
-// ─────────────────────────────────────────────────────────────
-void YGmax::setupTray()
-{
-    m_tray = new SystemTrayIcon(this, this);
-
-    connect(m_tray, &SystemTrayIcon::showMainWindow, this, [this]() {
-        showNormal();
-        activateWindow();
-        raise();
-        });
-
-    connect(m_tray, &SystemTrayIcon::checkUpdate, this, [this]() {
-        m_tray->showMessage(
-            QString(VER_PRODUCT_NAME),
-            tr("当前已是最新版本  v%1").arg(VERSION_STR),
-            QSystemTrayIcon::Information,
-            3000
-        );
-        });
-
-    m_tray->show();
-}
-// ─────────────────────────────────────────────────────────────
-//  圆角绘制
-// ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+//  绘制 / 缩放
+// ═══════════════════════════════════════════════════════════════
 void YGmax::paintEvent(QPaintEvent* event)
 {
     Q_UNUSED(event)
@@ -470,9 +774,9 @@ void YGmax::resizeEvent(QResizeEvent* event)
     setMask(QRegion(path.toFillPolygon().toPolygon()));
 }
 
-// ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
 //  全局事件过滤器（无边框窗口缩放）
-// ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
 bool YGmax::eventFilter(QObject* watched, QEvent* event)
 {
     Q_UNUSED(watched)
