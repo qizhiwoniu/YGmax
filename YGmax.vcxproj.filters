@@ -69,13 +69,7 @@
     <ClCompile Include="DocumentTabBar.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="RightPanel.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="Viewport3D.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="BottomPanel.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="SceneRunnerWidget.cpp">
@@ -83,6 +77,12 @@
     </ClCompile>
     <ClCompile Include="SettingsDialog.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="BottomPanel.cpp">
+      <Filter>Source Files\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="RightPanel.cpp">
+      <Filter>Source Files\UI</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -104,17 +104,17 @@
     <QtMoc Include="Viewport3D.h">
       <Filter>Header Files</Filter>
     </QtMoc>
-    <QtMoc Include="BottomPanel.h">
-      <Filter>Header Files</Filter>
-    </QtMoc>
     <QtMoc Include="SceneRunnerWidget.h">
       <Filter>Header Files</Filter>
     </QtMoc>
     <QtMoc Include="SettingsDialog.h">
       <Filter>Header Files</Filter>
     </QtMoc>
+    <QtMoc Include="BottomPanel.h">
+      <Filter>Header Files\UI</Filter>
+    </QtMoc>
     <QtMoc Include="RightPanel.h">
-      <Filter>Header Files</Filter>
+      <Filter>Header Files\UI</Filter>
     </QtMoc>
   </ItemGroup>
   <ItemGroup>
@@ -122,9 +122,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="SceneShaders.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="RightPanel.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
