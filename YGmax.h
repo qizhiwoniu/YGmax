@@ -14,12 +14,12 @@
 #include <QCursor>
 #include <QStackedWidget>
 #include <QPlainTextEdit>
-#include "ToolBar.h"
-#include "CustomTitleBar.h"
+#include "ui/ToolBar.h"
+#include "ui/CustomTitleBar.h"
 #include "SystemTrayIcon.h"
-#include "DocumentTabBar.h"
-#include "BottomPanel.h"
-#include "RightPanel.h"
+#include "ui/DocumentTabBar.h"
+#include "ui/BottomPanel.h"
+#include "ui/RightPanel.h"
 #include "Viewport3D.h"
 #include "SceneSerializer.h"   // ← 新增：SceneSnapshot / SerializeError
 

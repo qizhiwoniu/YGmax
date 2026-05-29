@@ -126,6 +126,7 @@
     <ClCompile Include="ui\CustomTitleBar.cpp" />
     <ClCompile Include="ui\DocumentTabBar.cpp" />
     <ClCompile Include="ui\RightPanel.cpp" />
+    <ClCompile Include="ui\ToolBar.cpp" />
     <ClCompile Include="Viewport3D.cpp" />
     <ClCompile Include="Viewport3D_Snapshot.cpp" />
     <ClCompile Include="YGmax.cpp" />
