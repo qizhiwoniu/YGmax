@@ -233,7 +233,7 @@ void YGmax::saveScene(bool saveAs)
     if (tabIdx >= 0)
         m_tabBar->setTabText(tabIdx, QFileInfo(path).baseName());
 
-    m_logPanel->appendLog(
+    m_logPanel->appendMessage(
         tr("[场景] 已保存：%1  (%2 个对象)")
             .arg(path).arg(snap.objects.size()));
 }
@@ -271,6 +271,7 @@ void YGmax::openScene()
         m_tabBar->show();
     }
     m_tabBar->setCurrentIndex(sceneTab);
+    m_stack->setVisible(true);
     m_stack->setCurrentWidget(m_viewport);
 
     // 加载快照（clearScene + 重建 GPU 资源 + 通知 Explorer）
@@ -279,7 +280,7 @@ void YGmax::openScene()
     m_currentScenePath = path;
     m_tabBar->setTabText(sceneTab, QFileInfo(path).baseName());
 
-    m_logPanel->appendLog(
+    m_logPanel->appendMessage(
         tr("[场景] 已打开：%1  (%2 个对象)")
             .arg(path).arg(snap.objects.size()));
 }
@@ -318,7 +319,7 @@ void YGmax::saveLuaScript(bool saveAs)
     if (tabIdx >= 0)
         m_tabBar->setTabText(tabIdx, QFileInfo(path).baseName() + ".lvl");
 
-    m_logPanel->appendLog(tr("[Lua] 已保存：%1").arg(path));
+    m_logPanel->appendMessage(tr("[Lua] 已保存：%1").arg(path));
 }
 
 // ── 打开 Lua 脚本 (.lvl) ─────────────────────────────────────
@@ -350,12 +351,13 @@ void YGmax::openLuaScript()
     m_tabBar->setCurrentIndex(idx);
     m_tabBar->show();
 
+    m_stack->setVisible(true);
     m_stack->setCurrentWidget(m_textEditor);
     m_textEditor->setPlainText(src);
 
     m_currentLuaPath = path;
 
-    //m_logPanel->appendLog(tr("[Lua] 已打开：%1").arg(path));
+    m_logPanel->appendMessage(tr("[Lua] 已打开：%1").arg(path));
 }
 
 // ── 统一打开对话框（按扩展名分发）────────────────────────────
@@ -538,6 +540,7 @@ void YGmax::setupMenuBar()
         int idx = m_tabBar->addTab(tr("未命名场景"));
         m_tabBar->setTabData(idx, 0);
         m_tabBar->show();
+        m_stack->setVisible(true);
         m_stack->setCurrentWidget(m_viewport);
         m_currentScenePath.clear();
     });
@@ -550,6 +553,7 @@ void YGmax::setupMenuBar()
         int idx = m_tabBar->addTab(tr("未命名脚本.lvl"));
         m_tabBar->setTabData(idx, 1);
         m_tabBar->show();
+        m_stack->setVisible(true);
         m_stack->setCurrentWidget(m_textEditor);
         m_textEditor->clear();
         m_currentLuaPath.clear();
@@ -589,10 +593,11 @@ void YGmax::setupMenuBar()
             m_tabBar->setTabData(idx, 1);
             m_tabBar->setCurrentIndex(idx);
             m_tabBar->show();
+            m_stack->setVisible(true);
             m_stack->setCurrentWidget(m_textEditor);
             m_textEditor->setPlainText(src);
             m_currentLuaPath = path;
-            //m_logPanel->appendLog(tr("[Lua] 已打开：%1").arg(path));
+            m_logPanel->appendMessage(tr("[Lua] 已打开：%1").arg(path));
 
         } else {
             // ── 直接加载场景 ──────────────────────────────
@@ -616,11 +621,12 @@ void YGmax::setupMenuBar()
                 m_tabBar->show();
             }
             m_tabBar->setCurrentIndex(sceneTab);
+            m_stack->setVisible(true);
             m_stack->setCurrentWidget(m_viewport);
             m_viewport->loadSnapshot(snap);
             m_currentScenePath = path;
             m_tabBar->setTabText(sceneTab, QFileInfo(path).baseName());
-            m_logPanel->appendLog(
+            m_logPanel->appendMessage(
                 tr("[场景] 已打开：%1  (%2 个对象)")
                     .arg(path).arg(snap.objects.size()));
         }
