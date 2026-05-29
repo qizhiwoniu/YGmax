@@ -4,6 +4,7 @@
 #include <QHBoxLayout>
 #include <QScrollArea>
 #include <QList>
+#include <QLabel> 
 
 struct DocTab {
     QString   title;
@@ -21,6 +22,8 @@ public:
     int  addTab(const QString& title);       // 返回 index
     void removeTab(int index);
     void setCurrentTab(int index);
+    void setCurrentIndex(int index);                        // ← 新增
+    void setTabText(int index, const QString& title);
     void setTabModified(int index, bool modified);
     void setTabData(int index, int kind);    // 存 kind
     int  tabData(int index) const;           // 读 kind

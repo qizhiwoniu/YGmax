@@ -145,7 +145,23 @@ void DocumentTabBar::setTabModified(int index, bool modified)
         label->setText(text);
     }
 }
+void DocumentTabBar::setCurrentIndex(int index)
+{
+    setCurrentTab(index);
+}
 
+void DocumentTabBar::setTabText(int index, const QString& title)
+{
+    if (index < 0 || index >= m_tabs.count()) return;
+    m_tabs[index].title = title;
+
+    auto* label = m_tabs[index].btn->findChild<QLabel*>("tabTitle");
+    if (label) {
+        QString text = title;
+        if (m_tabs[index].modified) text.prepend("• ");
+        label->setText(text);
+    }
+}
 void DocumentTabBar::applyStyle()
 {
     setStyleSheet(R"(
