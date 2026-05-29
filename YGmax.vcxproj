@@ -103,36 +103,35 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <QtMoc Include="Viewport3D.h" />
-    <QtMoc Include="AboutDialog.h" />
     <QtMoc Include="SystemTrayIcon.h" />
-    <QtMoc Include="ToolBar.h" />
-    <QtMoc Include="DocumentTabBar.h" />
-    <QtMoc Include="BottomPanel.h" />
     <QtMoc Include="SceneRunnerWidget.h" />
-    <QtMoc Include="RightPanel.h" />
     <ClInclude Include="SceneSerializer.h" />
     <ClInclude Include="SceneShaders.h" />
     <QtMoc Include="SettingsDialog.h" />
+    <QtMoc Include="ui\AboutDialog.h" />
+    <QtMoc Include="ui\BottomPanel.h" />
+    <QtMoc Include="ui\CustomTitleBar.h" />
+    <QtMoc Include="ui\DocumentTabBar.h" />
+    <QtMoc Include="ui\RightPanel.h" />
+    <QtMoc Include="ui\ToolBar.h" />
     <ClInclude Include="version.h" />
     <QtRcc Include="YGmax.qrc" />
     <QtMoc Include="YGmax.h" />
-    <ClCompile Include="AboutDialog.cpp" />
-    <ClCompile Include="BottomPanel.cpp" />
-    <ClCompile Include="CustomTitleBar.cpp" />
-    <ClCompile Include="DocumentTabBar.cpp" />
-    <ClCompile Include="RightPanel.cpp" />
     <ClCompile Include="SceneRunnerWidget.cpp" />
     <ClCompile Include="SceneSerializer.cpp" />
     <ClCompile Include="SettingsDialog.cpp" />
     <ClCompile Include="SystemTrayIcon.cpp" />
-    <ClCompile Include="ToolBar.cpp" />
+    <ClCompile Include="ui\AboutDialog.cpp" />
+    <ClCompile Include="ui\BottomPanel.cpp" />
+    <ClCompile Include="ui\CustomTitleBar.cpp" />
+    <ClCompile Include="ui\DocumentTabBar.cpp" />
+    <ClCompile Include="ui\RightPanel.cpp" />
     <ClCompile Include="Viewport3D.cpp" />
     <ClCompile Include="Viewport3D_Snapshot.cpp" />
     <ClCompile Include="YGmax.cpp" />
     <ClCompile Include="main.cpp" />
     <None Include="YGmax.ico" />
     <ResourceCompile Include="YGmax.rc" />
-    <QtMoc Include="CustomTitleBar.h" />
     <ClInclude Include="stdafx.h" />
     <ClCompile Include="stdafx.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">Create</PrecompiledHeader>

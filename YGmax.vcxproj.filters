@@ -57,18 +57,6 @@
     <ClCompile Include="SystemTrayIcon.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="ToolBar.cpp">
-      <Filter>Source Files\UI</Filter>
-    </ClCompile>
-    <ClCompile Include="AboutDialog.cpp">
-      <Filter>Source Files\UI</Filter>
-    </ClCompile>
-    <ClCompile Include="CustomTitleBar.cpp">
-      <Filter>Source Files\UI</Filter>
-    </ClCompile>
-    <ClCompile Include="DocumentTabBar.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="Viewport3D.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -78,33 +66,30 @@
     <ClCompile Include="SettingsDialog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="BottomPanel.cpp">
-      <Filter>Source Files\UI</Filter>
-    </ClCompile>
-    <ClCompile Include="RightPanel.cpp">
-      <Filter>Source Files\UI</Filter>
-    </ClCompile>
     <ClCompile Include="SceneSerializer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Viewport3D_Snapshot.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ui\AboutDialog.cpp">
+      <Filter>Source Files\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\BottomPanel.cpp">
+      <Filter>Source Files\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\CustomTitleBar.cpp">
+      <Filter>Source Files\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\DocumentTabBar.cpp">
+      <Filter>Source Files\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\RightPanel.cpp">
+      <Filter>Source Files\UI</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="SystemTrayIcon.h">
-      <Filter>Header Files</Filter>
-    </QtMoc>
-    <QtMoc Include="ToolBar.h">
-      <Filter>Header Files\UI</Filter>
-    </QtMoc>
-    <QtMoc Include="AboutDialog.h">
-      <Filter>Header Files\UI</Filter>
-    </QtMoc>
-    <QtMoc Include="CustomTitleBar.h">
-      <Filter>Header Files\UI</Filter>
-    </QtMoc>
-    <QtMoc Include="DocumentTabBar.h">
       <Filter>Header Files</Filter>
     </QtMoc>
     <QtMoc Include="Viewport3D.h">
@@ -116,10 +101,22 @@
     <QtMoc Include="SettingsDialog.h">
       <Filter>Header Files</Filter>
     </QtMoc>
-    <QtMoc Include="BottomPanel.h">
+    <QtMoc Include="ui\AboutDialog.h">
       <Filter>Header Files\UI</Filter>
     </QtMoc>
-    <QtMoc Include="RightPanel.h">
+    <QtMoc Include="ui\BottomPanel.h">
+      <Filter>Header Files\UI</Filter>
+    </QtMoc>
+    <QtMoc Include="ui\CustomTitleBar.h">
+      <Filter>Header Files\UI</Filter>
+    </QtMoc>
+    <QtMoc Include="ui\DocumentTabBar.h">
+      <Filter>Header Files\UI</Filter>
+    </QtMoc>
+    <QtMoc Include="ui\RightPanel.h">
+      <Filter>Header Files\UI</Filter>
+    </QtMoc>
+    <QtMoc Include="ui\ToolBar.h">
       <Filter>Header Files\UI</Filter>
     </QtMoc>
   </ItemGroup>
