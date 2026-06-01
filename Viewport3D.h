@@ -29,6 +29,7 @@
 #include <QComboBox>
 #include <QLabel>
 #include <QDragEnterEvent>
+#include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QMimeData>
 #include <vector>
@@ -157,6 +158,10 @@ public:
     void addLight   (const QString& name,
                      QVector3D pos  = {0,0,0},
                      QColor    color = {255,240,100});
+    void addObjMesh(const QString& name,
+                    const QString& filePath,
+                    QVector3D      pos = {},
+                    QColor         color = QColor(140, 180, 230));
 
     void clearScene();
     void setRenderMode(RenderMode mode);
@@ -200,6 +205,7 @@ protected:
     void wheelEvent       (QWheelEvent*    e) override;
     void keyPressEvent    (QKeyEvent*      e) override;
     void dragEnterEvent   (QDragEnterEvent* e) override;
+    void dragMoveEvent    (QDragMoveEvent*  e) override;
     void dropEvent        (QDropEvent*     e) override;
 
 private:

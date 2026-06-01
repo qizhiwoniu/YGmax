@@ -6,5 +6,6 @@
         <file>ico/f96x96.png</file>
         <file>ico/play96x96.png</file>
         <file>ico/start96x96.png</file>
+        <file>ico/direction_arrow.png</file>
     </qresource>
 </RCC>

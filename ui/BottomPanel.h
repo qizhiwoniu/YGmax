@@ -11,6 +11,18 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QPushButton>
+#include <QOpenGLWidget>
+#include <QOpenGLFunctions>
+#include <QOpenGLShaderProgram>
+#include <QOpenGLBuffer>
+#include <QOpenGLVertexArrayObject>
+#include <QMatrix4x4>
+#include <QVector3D>
+#include <QTimer>
+#include <QMouseEvent>
+#include <QWheelEvent>
+#include <QDrag>
+#include <QMimeData>
 
 // ─────────────────────────────────────────────────────────────
 //  AssetBrowserPanel   左：文件夹树   右：文件列表
@@ -57,8 +69,15 @@ private slots:
     void fileDelete();
     void fileNewFolder();
 
+    // ── OBJ 导入 ──────────────────────────────────────────────
+    void importObjFile();
+    void importFbxFile();
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
+
+    // ── 拖拽支持 ──────────────────────────────────────────────
+    void mousePressEvent(QMouseEvent* e) override;
+    void mouseMoveEvent(QMouseEvent* e) override;
 
 private:
     void applyStyle();
@@ -90,6 +109,10 @@ private:
     QString       m_clipboardPath;    // 被复制/剪切的文件路径
     bool          m_clipboardIsCut = false;  // true=剪切，false=复制
 
+    // ── 拖拽状态 ──────────────────────────────────────────────
+    QPoint        m_dragStartPos;
+    bool          m_dragPending = false;
+
     // 刷新目录树中某个节点
     void refreshTreeNode(const QString& dirPath);
 };
@@ -115,7 +138,83 @@ private:
 };
 
 // ─────────────────────────────────────────────────────────────
-//  AssetPreviewPanel
+//  ObjMesh  —  轻量级 OBJ 解析结果（仅位置 + 法线）
+// ─────────────────────────────────────────────────────────────
+struct ObjMesh {
+    std::vector<float>    vertices;  // layout: pos(3) + normal(3) per vertex
+    std::vector<uint32_t> indices;
+    QString               filePath;
+    bool                  valid = false;
+
+    // 归一化包围盒，供预览居中
+    QVector3D bboxMin, bboxMax;
+
+    static ObjMesh load(const QString& path);
+};
+
+// ─────────────────────────────────────────────────────────────
+//  ObjPreviewWidget  —  内嵌 OpenGL 3D 预览（旋转/缩放）
+// ─────────────────────────────────────────────────────────────
+class ObjPreviewWidget : public QOpenGLWidget, protected QOpenGLFunctions
+{
+    Q_OBJECT
+public:
+    explicit ObjPreviewWidget(QWidget* parent = nullptr);
+    ~ObjPreviewWidget() override;
+
+    void loadMesh(const ObjMesh& mesh);
+    void clearMesh();
+
+protected:
+    void initializeGL()  override;
+    void resizeGL(int w, int h) override;
+    void paintGL()       override;
+
+    void mousePressEvent  (QMouseEvent* e) override;
+    void mouseMoveEvent   (QMouseEvent* e) override;
+    void mouseReleaseEvent(QMouseEvent* e) override;
+    void wheelEvent       (QWheelEvent* e) override;
+
+private:
+    void buildShader();
+    void uploadMesh();
+
+    QOpenGLShaderProgram  m_shader;
+    QOpenGLVertexArrayObject m_vao;
+    QOpenGLBuffer         m_vbo { QOpenGLBuffer::VertexBuffer };
+    QOpenGLBuffer         m_ebo { QOpenGLBuffer::IndexBuffer  };
+
+    std::vector<float>    m_verts;
+    std::vector<uint32_t> m_idx;
+    int                   m_indexCount = 0;
+    bool                  m_meshReady  = false;
+    bool                  m_gpuReady   = false;   // 等 initializeGL 后才上传
+
+    // 归一化偏移 & 缩放
+    QVector3D             m_center;
+    float                 m_radius = 1.f;
+
+    // 轨道相机
+    float m_yaw   = 30.f;
+    float m_pitch = 20.f;
+    float m_dist  =  2.5f;
+    QPoint    m_lastMouse;
+    bool      m_rotating = false;
+
+    // 中键平移（Pan）
+    bool      m_panning  = false;
+    QVector3D m_panOffset;           // 相机注视点相对于模型中心的平移量
+
+    // 自动旋转
+    QTimer* m_autoRotTimer = nullptr;
+
+    // GLSL
+    static const char* kVert;
+    static const char* kFrag;
+};
+
+// ─────────────────────────────────────────────────────────────
+//  AssetPreviewPanel  —  图片预览 + OBJ 3D 预览
 // ─────────────────────────────────────────────────────────────
 class AssetPreviewPanel : public QWidget
 {
@@ -129,9 +228,10 @@ public slots:
 private:
     void applyStyle();
 
-    QLabel* m_previewLabel = nullptr;
-    QLabel* m_infoLabel    = nullptr;
-    QLabel* m_noSelLabel   = nullptr;
+    QLabel*           m_previewLabel = nullptr;
+    QLabel*           m_infoLabel    = nullptr;
+    QLabel*           m_noSelLabel   = nullptr;
+    ObjPreviewWidget* m_objPreview   = nullptr;   // OBJ 3D 预览
 };
 
 // ─────────────────────────────────────────────────────────────

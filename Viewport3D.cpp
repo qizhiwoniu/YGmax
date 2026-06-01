@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "Viewport3D.h"
+#include "ui/BottomPanel.h"   // ObjMesh 解析器
 #include "SceneShaders.h"
 #include <QtMath>
 #include <cmath>
@@ -1051,7 +1052,18 @@ void Viewport3D::showContextMenu(const QPoint& pos)
 // ═══════════════════════════════════════════════════════════════
 void Viewport3D::dragEnterEvent(QDragEnterEvent* e)
 {
-    if (e->mimeData()->hasFormat("application/x-primitive"))
+    if (e->mimeData()->hasFormat("application/x-primitive") ||
+        e->mimeData()->hasFormat("application/x-obj-asset"))
+        e->acceptProposedAction();
+    else
+        e->ignore();
+}
+
+// dragMoveEvent 必须持续 accept，否则 dropEvent 不会触发
+void Viewport3D::dragMoveEvent(QDragMoveEvent* e)
+{
+    if (e->mimeData()->hasFormat("application/x-primitive") ||
+        e->mimeData()->hasFormat("application/x-obj-asset"))
         e->acceptProposedAction();
     else
         e->ignore();
@@ -1059,30 +1071,58 @@ void Viewport3D::dragEnterEvent(QDragEnterEvent* e)
 
 void Viewport3D::dropEvent(QDropEvent* e)
 {
-    if (!e->mimeData()->hasFormat("application/x-primitive")) { e->ignore(); return; }
+    // ── 计算鼠标在场景 Y=0 平面的世界坐标 ─────────────────────
+    auto screenToWorld = [&](const QPointF& sp) -> QVector3D {
+        float nx  =  2.f * (float)sp.x() / m_vpW - 1.f;
+        float ny  = -2.f * (float)sp.y() / m_vpH + 1.f;
+        float asp = (float)m_vpW / m_vpH;
+        QMatrix4x4 inv = (m_camera.projMatrix(asp, m_useOrtho)
+                          * m_camera.viewMatrix()).inverted();
+        QVector4D np4 = inv * QVector4D(nx, ny, -1.f, 1.f);
+        QVector4D fp4 = inv * QVector4D(nx, ny,  1.f, 1.f);
+        np4 /= np4.w(); fp4 /= fp4.w();
+        QVector3D ori = np4.toVector3D();
+        QVector3D dir = (fp4.toVector3D() - ori).normalized();
+        QVector3D wp(0, 0, 0);
+        if (qAbs(dir.y()) > 1e-4f) {
+            float t = -ori.y() / dir.y();
+            wp = ori + dir * t;
+            wp.setY(0.f);
+        }
+        return wp;
+    };
 
-    QString type = QString::fromUtf8(e->mimeData()->data("application/x-primitive"));
+    // ── OBJ 资产拖入 ───────────────────────────────────────────
+    if (e->mimeData()->hasFormat("application/x-obj-asset")) {
+        QString objPath = QString::fromUtf8(
+            e->mimeData()->data("application/x-obj-asset"));
+        QVector3D worldPos = screenToWorld(e->position());
 
-    QPointF sp = e->position();
-    float nx =  2.f * (float)sp.x() / m_vpW - 1.f;
-    float ny = -2.f * (float)sp.y() / m_vpH + 1.f;
-    float asp = (float)m_vpW / m_vpH;
+        static int s_objCounter = 1;
+        QString baseName = QFileInfo(objPath).completeBaseName();
+        QString uniqueName = baseName + "_" + QString::number(s_objCounter++);
 
-    QMatrix4x4 inv = (m_camera.projMatrix(asp, m_useOrtho) * m_camera.viewMatrix()).inverted();
-    QVector4D np4 = inv * QVector4D(nx, ny, -1.f, 1.f);
-    QVector4D fp4 = inv * QVector4D(nx, ny,  1.f, 1.f);
-    np4 /= np4.w(); fp4 /= fp4.w();
-
-    QVector3D ori = np4.toVector3D();
-    QVector3D dir = (fp4.toVector3D() - ori).normalized();
-
-    // 与 Y=0 平面（世界原点所在水平面）求交
-    QVector3D worldPos(0, 0, 0);
-    if (qAbs(dir.y()) > 1e-4f) {
-        float t = -ori.y() / dir.y();
-        worldPos = ori + dir * t;
-        worldPos.setY(0.f);
+        addObjMesh(uniqueName, objPath, worldPos);
+        e->acceptProposedAction();
+        return;
     }
+
+    // ── 内置图元拖入（原有逻辑）────────────────────────────────
+    if (!e->mimeData()->hasFormat("application/x-primitive")) {
+        e->ignore();
+        return;
+    }
+
+    QString type = QString::fromUtf8(
+        e->mimeData()->data("application/x-primitive"));
+
+    // 过滤掉 OBJ 携带的 primitive mime（"OBJ:path" 格式）
+    if (type.startsWith("OBJ:")) {
+        e->ignore();
+        return;
+    }
+
+    QVector3D worldPos = screenToWorld(e->position());
 
     static int s_dropCounter = 1;
     QString uniqueName = type + "_" + QString::number(s_dropCounter++);
@@ -1096,6 +1136,48 @@ void Viewport3D::dropEvent(QDropEvent* e)
         addLight(uniqueName, worldPos, QColor(255, 240, 100));
 
     e->acceptProposedAction();
+}
+
+// ── OBJ 文件导入到场景 ────────────────────────────────────────
+// 依赖 BottomPanel.h 的 ObjMesh 解析器
+// 在同一编译单元中只需 include BottomPanel.h
+void Viewport3D::addObjMesh(const QString& name,
+                             const QString& filePath,
+                             QVector3D      pos,
+                             QColor         color)
+{
+    // 复用 BottomPanel 中的轻量 OBJ 解析器
+    ObjMesh mesh = ObjMesh::load(filePath);
+    if (!mesh.valid || mesh.vertices.empty()) {
+        // 解析失败：在该位置放一个红色 Box 作为占位
+        addBox(name + "_err", pos, {0.5f, 0.5f, 0.5f}, QColor(220, 60, 60));
+        return;
+    }
+
+    auto obj       = std::make_unique<SceneObject>();
+    obj->name      = name;
+    obj->position  = pos;
+    obj->color     = color;
+    obj->kind      = ObjectKind::Mesh;
+
+    // 归一化缩放：让最大轴长 ≈ 1 单位，使模型拖入后尺寸合理
+    QVector3D ext = mesh.bboxMax - mesh.bboxMin;
+    float maxExt  = std::max({ ext.x(), ext.y(), ext.z() });
+    if (maxExt > 1e-4f) obj->scale = QVector3D(1.f, 1.f, 1.f) * (1.f / maxExt);
+
+    // XZ: 平移到包围盒 XZ 中心（让模型水平居中于落点）
+    // Y : 平移到包围盒底部（让模型底面落在 Y=0 网格平面上）
+    QVector3D center = (mesh.bboxMin + mesh.bboxMax) * 0.5f;
+    float yOffset    = mesh.bboxMin.y();   // 底部 Y 值（原始坐标系）
+
+    std::vector<float> verts = mesh.vertices;
+    for (size_t i = 0; i < verts.size(); i += 6) {
+        verts[i]   -= center.x();          // X: 移到中心
+        verts[i+1] -= yOffset;             // Y: 底部对齐到 0
+        verts[i+2] -= center.z();          // Z: 移到中心
+    }
+
+    finalizeAdd(std::move(obj), verts, mesh.indices);
 }
 
 // ═══════════════════════════════════════════════════════════════

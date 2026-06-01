@@ -18,11 +18,402 @@
 #include <QApplication>
 #include <QFileIconProvider>
 #include <QStyle>
+#include <QFileDialog>
+#include <QDrag>
+#include <QMimeData>
+#include <QSizePolicy>
+#include <QStackedWidget>
 #include <functional>
+#include <cmath>
 
-// ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
+//  ObjMesh  —  微型 OBJ 解析器（支持 v / vn / f，多边形三角化）
+// ════════════════════════════════════════════════════════════════
+ObjMesh ObjMesh::load(const QString& path)
+{
+    ObjMesh out;
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
+        return out;
+
+    // 原始数据
+    std::vector<QVector3D> pos;
+    std::vector<QVector3D> nrm;
+
+    // 最终交错顶点 & 索引（简化：每个面角独立顶点，不共享）
+    std::vector<float>&    verts = out.vertices;
+    std::vector<uint32_t>& idx   = out.indices;
+
+    QVector3D bmin( 1e9f, 1e9f, 1e9f);
+    QVector3D bmax(-1e9f,-1e9f,-1e9f);
+
+    auto updateBB = [&](const QVector3D& p) {
+        bmin.setX(std::min(bmin.x(), p.x()));
+        bmin.setY(std::min(bmin.y(), p.y()));
+        bmin.setZ(std::min(bmin.z(), p.z()));
+        bmax.setX(std::max(bmax.x(), p.x()));
+        bmax.setY(std::max(bmax.y(), p.y()));
+        bmax.setZ(std::max(bmax.z(), p.z()));
+    };
+
+    while (!f.atEnd()) {
+        QString line = f.readLine().trimmed();
+        if (line.startsWith('#') || line.isEmpty()) continue;
+
+        QStringList tk = line.split(' ', Qt::SkipEmptyParts);
+        if (tk.isEmpty()) continue;
+
+        if (tk[0] == "v" && tk.size() >= 4) {
+            pos.push_back({ tk[1].toFloat(), tk[2].toFloat(), tk[3].toFloat() });
+        } else if (tk[0] == "vn" && tk.size() >= 4) {
+            nrm.push_back({ tk[1].toFloat(), tk[2].toFloat(), tk[3].toFloat() });
+        } else if (tk[0] == "f" && tk.size() >= 4) {
+            // 解析每个面角 "v", "v/t", "v/t/n", "v//n"
+            struct FVert { int vi = -1, ni = -1; };
+            auto parseVert = [](const QString& s) -> FVert {
+                FVert fv;
+                QStringList p = s.split('/');
+                if (!p.isEmpty()) fv.vi = p[0].toInt() - 1;
+                if (p.size() >= 3 && !p[2].isEmpty()) fv.ni = p[2].toInt() - 1;
+                return fv;
+            };
+
+            // 扇形三角化  (0,1,2), (0,2,3), …
+            QVector<FVert> face;
+            for (int i = 1; i < tk.size(); ++i)
+                face.push_back(parseVert(tk[i]));
+
+            for (int i = 1; i + 1 < face.size(); ++i) {
+                FVert corners[3] = { face[0], face[i], face[i+1] };
+                for (auto& fv : corners) {
+                    if (fv.vi < 0 || fv.vi >= (int)pos.size()) continue;
+                    QVector3D p = pos[fv.vi];
+                    updateBB(p);
+
+                    QVector3D n(0, 1, 0);
+                    if (fv.ni >= 0 && fv.ni < (int)nrm.size())
+                        n = nrm[fv.ni];
+
+                    idx.push_back((uint32_t)verts.size() / 6);
+                    verts.insert(verts.end(), { p.x(), p.y(), p.z(),
+                                                n.x(), n.y(), n.z() });
+                }
+            }
+        }
+    }
+
+    if (verts.empty()) return out;   // 无有效几何
+
+    // 若文件没有法线，按三角形面法线补算
+    if (nrm.empty()) {
+        for (size_t i = 0; i + 2 < idx.size(); i += 3) {
+            uint32_t a = idx[i]*6, b = idx[i+1]*6, c = idx[i+2]*6;
+            QVector3D pa(verts[a],   verts[a+1], verts[a+2]);
+            QVector3D pb(verts[b],   verts[b+1], verts[b+2]);
+            QVector3D pc(verts[c],   verts[c+1], verts[c+2]);
+            QVector3D fn = QVector3D::crossProduct(pb - pa, pc - pa).normalized();
+            for (int k = 0; k < 3; ++k) {
+                uint32_t base = idx[i+k]*6;
+                verts[base+3] = fn.x();
+                verts[base+4] = fn.y();
+                verts[base+5] = fn.z();
+            }
+        }
+    }
+
+    out.bboxMin  = bmin;
+    out.bboxMax  = bmax;
+    out.filePath = path;
+    out.valid    = true;
+    return out;
+}
+
+// ════════════════════════════════════════════════════════════════
+//  ObjPreviewWidget  —  迷你轨道相机 OpenGL 预览
+// ════════════════════════════════════════════════════════════════
+
+// ── GLSL ────────────────────────────────────────────────────────
+const char* ObjPreviewWidget::kVert = R"GLSL(
+#version 330 core
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNorm;
+uniform mat4 uMVP;
+uniform mat4 uModel;
+out vec3 vNorm;
+out vec3 vPos;
+void main(){
+    vNorm = mat3(transpose(inverse(uModel))) * aNorm;
+    vPos  = vec3(uModel * vec4(aPos, 1.0));
+    gl_Position = uMVP * vec4(aPos, 1.0);
+}
+)GLSL";
+
+const char* ObjPreviewWidget::kFrag = R"GLSL(
+#version 330 core
+in  vec3 vNorm;
+in  vec3 vPos;
+out vec4 fragColor;
+uniform vec3 uCamPos;
+void main(){
+    vec3 N = normalize(vNorm);
+    vec3 L = normalize(vec3(1.2, 2.0, 1.5));
+    vec3 V = normalize(uCamPos - vPos);
+    vec3 H = normalize(L + V);
+    vec3 baseCol = vec3(0.55, 0.72, 0.90);
+    float diff  = max(dot(N, L), 0.0) * 0.8 + 0.18;
+    float spec  = pow(max(dot(N, H), 0.0), 32.0) * 0.4;
+    float rim   = pow(1.0 - max(dot(N, V), 0.0), 2.5) * 0.18;
+    fragColor = vec4(baseCol * diff + vec3(spec) + vec3(rim), 1.0);
+}
+)GLSL";
+
+ObjPreviewWidget::ObjPreviewWidget(QWidget* parent)
+    : QOpenGLWidget(parent)
+{
+    QSurfaceFormat fmt;
+    fmt.setVersion(3, 3);
+    fmt.setProfile(QSurfaceFormat::CoreProfile);
+    fmt.setSamples(4);
+    fmt.setDepthBufferSize(24);
+    setFormat(fmt);
+
+    setMouseTracking(true);
+    setCursor(Qt::ArrowCursor);
+
+    // 自动旋转定时器（每帧 ~60fps，慢速自转）
+    m_autoRotTimer = new QTimer(this);
+    m_autoRotTimer->setInterval(16);
+    connect(m_autoRotTimer, &QTimer::timeout, this, [this]() {
+        m_yaw += 0.4f;
+        update();
+    });
+    m_autoRotTimer->start();
+}
+
+ObjPreviewWidget::~ObjPreviewWidget()
+{
+    makeCurrent();
+    m_vao.destroy();
+    m_vbo.destroy();
+    m_ebo.destroy();
+    doneCurrent();
+}
+
+void ObjPreviewWidget::loadMesh(const ObjMesh& mesh)
+{
+    // ── 计算包围盒中心与最大半径 ──────────────────────────────
+    m_center = (mesh.bboxMin + mesh.bboxMax) * 0.5f;
+    float dx = mesh.bboxMax.x() - mesh.bboxMin.x();
+    float dy = mesh.bboxMax.y() - mesh.bboxMin.y();
+    float dz = mesh.bboxMax.z() - mesh.bboxMin.z();
+    m_radius = std::max({ dx, dy, dz }) * 0.5f;
+    if (m_radius < 1e-4f) m_radius = 1.f;
+
+    // ── 在 CPU 端做归一化：平移到中心，缩放到半径 = 1 ────────
+    // 这样 GPU 端不需要 model.scale，避免 model/camera 单位不一致
+    m_verts.resize(mesh.vertices.size());
+    float invR = 1.f / m_radius;
+    for (size_t i = 0; i < mesh.vertices.size(); i += 6) {
+        m_verts[i]   = (mesh.vertices[i]   - m_center.x()) * invR;
+        m_verts[i+1] = (mesh.vertices[i+1] - m_center.y()) * invR;
+        m_verts[i+2] = (mesh.vertices[i+2] - m_center.z()) * invR;
+        // 法线不受平移影响，缩放均匀所以方向不变，直接复制
+        m_verts[i+3] = mesh.vertices[i+3];
+        m_verts[i+4] = mesh.vertices[i+4];
+        m_verts[i+5] = mesh.vertices[i+5];
+    }
+    m_idx = mesh.indices;
+
+    // ── 归一化后模型半径固定为 1.0，相机距离统一按此设定 ─────
+    m_dist      = 2.2f;   // 距离 2.2 个单位，FOV=45°，模型正好充满约 80% 视口
+    m_panOffset = QVector3D(0, 0, 0);
+
+    m_meshReady = true;
+    if (isValid()) {
+        makeCurrent();
+        uploadMesh();
+        doneCurrent();
+    }
+    update();
+    m_autoRotTimer->start();
+}
+
+void ObjPreviewWidget::clearMesh()
+{
+    m_meshReady  = false;
+    m_gpuReady   = false;
+    m_indexCount = 0;
+    update();
+    m_autoRotTimer->stop();
+}
+
+void ObjPreviewWidget::initializeGL()
+{
+    initializeOpenGLFunctions();
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_MULTISAMPLE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glClearColor(0.13f, 0.13f, 0.14f, 1.f);
+
+    buildShader();
+
+    m_vao.create();
+    m_vbo.create();
+    m_ebo.create();
+
+    if (m_meshReady)
+        uploadMesh();
+}
+
+void ObjPreviewWidget::buildShader()
+{
+    m_shader.addShaderFromSourceCode(QOpenGLShader::Vertex,   kVert);
+    m_shader.addShaderFromSourceCode(QOpenGLShader::Fragment, kFrag);
+    m_shader.link();
+}
+
+void ObjPreviewWidget::uploadMesh()
+{
+    m_vao.bind();
+    m_vbo.bind();
+    m_vbo.allocate(m_verts.data(), (int)(m_verts.size() * sizeof(float)));
+    m_ebo.bind();
+    m_ebo.allocate(m_idx.data(),   (int)(m_idx.size()   * sizeof(uint32_t)));
+
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float), nullptr);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float),
+                          (void*)(3*sizeof(float)));
+    m_vao.release();
+
+    m_indexCount = (int)m_idx.size();
+    m_gpuReady   = true;
+}
+
+void ObjPreviewWidget::resizeGL(int w, int h)
+{
+    glViewport(0, 0, w, qMax(h, 1));
+}
+
+void ObjPreviewWidget::paintGL()
+{
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    if (!m_gpuReady || m_indexCount == 0) return;
+
+    float asp = (float)width() / qMax(height(), 1);
+    float yr  = qDegreesToRadians(m_yaw);
+    float pr  = qDegreesToRadians(m_pitch);
+
+    // 归一化后模型在原点，半径=1；相机绕原点轨道，+ panOffset 平移注视点
+    QVector3D lookAt = m_panOffset;   // 模型已归一化到原点，无需 m_center 偏移
+
+    QVector3D eye(
+        m_dist * cosf(pr) * sinf(yr),
+        m_dist * sinf(pr),
+        m_dist * cosf(pr) * cosf(yr)
+    );
+    eye += lookAt;
+
+    QMatrix4x4 view, proj;
+    view.lookAt(eye, lookAt, {0, 1, 0});
+    // near/far 基于归一化后的单位（半径=1）
+    proj.perspective(45.f, asp, 0.01f, 100.f);
+
+    // model 矩阵为单位矩阵（CPU 端已做归一化，GPU 不需要再缩放）
+    QMatrix4x4 model;   // 默认 identity
+
+    m_shader.bind();
+    m_shader.setUniformValue("uMVP",    proj * view * model);
+    m_shader.setUniformValue("uModel",  model);
+    m_shader.setUniformValue("uCamPos", eye);
+
+    m_vao.bind();
+    glDrawElements(GL_TRIANGLES, m_indexCount, GL_UNSIGNED_INT, nullptr);
+    m_vao.release();
+    m_shader.release();
+}
+
+void ObjPreviewWidget::mousePressEvent(QMouseEvent* e)
+{
+    m_lastMouse = e->pos();
+
+    if (e->button() == Qt::LeftButton) {
+        m_rotating = true;
+        m_panning  = false;
+        m_autoRotTimer->stop();
+        e->accept();
+    } else if (e->button() == Qt::MiddleButton) {
+        m_panning  = true;
+        m_rotating = false;
+        m_autoRotTimer->stop();
+        e->accept();
+    } else if (e->button() == Qt::RightButton) {
+        // 右键：重置相机（平移归零、恢复默认距离与角度）
+        m_panOffset = QVector3D(0, 0, 0);
+        m_dist  = 2.2f;
+        m_yaw   = 30.f;
+        m_pitch = 20.f;
+        m_autoRotTimer->start();
+        update();
+        e->accept();
+    }
+}
+
+void ObjPreviewWidget::mouseMoveEvent(QMouseEvent* e)
+{
+    QPoint delta = e->pos() - m_lastMouse;
+    m_lastMouse  = e->pos();
+
+    if (m_rotating && (e->buttons() & Qt::LeftButton)) {
+        m_yaw   -= delta.x() * 0.6f;
+        m_pitch += delta.y() * 0.6f;
+        m_pitch  = qBound(-85.f, m_pitch, 85.f);
+        update();
+        e->accept();
+    } else if (m_panning && (e->buttons() & Qt::MiddleButton)) {
+        // 在相机的右/上方向平移注视点
+        float yr = qDegreesToRadians(m_yaw);
+        float pr = qDegreesToRadians(m_pitch);
+        QVector3D forward(cosf(pr) * sinf(yr), sinf(pr), cosf(pr) * cosf(yr));
+        QVector3D right = QVector3D::crossProduct(forward, QVector3D(0, 1, 0)).normalized();
+        QVector3D up    = QVector3D::crossProduct(right, forward).normalized();
+
+        // 平移灵敏度：与距离和模型半径成比例
+        float sens = m_dist * 0.0015f;
+        m_panOffset -= right * (float)delta.x() * sens;
+        m_panOffset += up    * (float)delta.y() * sens;
+        update();
+        e->accept();
+    }
+}
+
+void ObjPreviewWidget::mouseReleaseEvent(QMouseEvent* e)
+{
+    if (e->button() == Qt::LeftButton && m_rotating) {
+        m_rotating = false;
+        m_autoRotTimer->start();
+        e->accept();
+    } else if (e->button() == Qt::MiddleButton && m_panning) {
+        m_panning = false;
+        m_autoRotTimer->start();
+        e->accept();
+    }
+}
+
+void ObjPreviewWidget::wheelEvent(QWheelEvent* e)
+{
+    float delta = e->angleDelta().y() / 120.f;
+    // 归一化后半径=1，限制在 [0.5, 8.0] 单位内缩放
+    m_dist = qBound(0.5f, m_dist - delta * m_dist * 0.15f, 8.f);
+    update();
+    e->accept();
+}
+
+// ════════════════════════════════════════════════════════════════
 //  AssetBrowserPanel  —  真实文件系统版
-// ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 
 // ── 示例文件列表（每个子目录写入一批空文件作为占位资产）──────
 static const QMap<QString, QStringList> kSampleFiles = {
@@ -98,7 +489,6 @@ AssetBrowserPanel::AssetBrowserPanel(QWidget* parent)
         if (d.cdUp() && d.absolutePath().length() >=
                         mediaRoot().length()) {
             m_currentDir = d.absolutePath();
-            // 更新路径标签（显示相对 Media 的部分）
             QString rel = QDir(mediaRoot()).relativeFilePath(m_currentDir);
             m_pathLabel->setText(rel.isEmpty() ? "Media" : "Media / " + rel);
             populateFileList(m_currentDir, m_searchBar->text());
@@ -140,7 +530,6 @@ void AssetBrowserPanel::initLog()
 {
     emit logMessage(tr("[AssetBrowser] 初始化完成，根目录: %1").arg(m_currentDir), 0);
 
-    // 统计当前目录内容
     QDir dir(m_currentDir);
     int dirs  = dir.entryList(QDir::Dirs  | QDir::NoDotAndDotDot).count();
     int files = dir.entryList(QDir::Files).count();
@@ -155,16 +544,13 @@ void AssetBrowserPanel::setupFolderTree()
     m_folderTree->setObjectName("folderTree");
     m_folderTree->setHeaderHidden(true);
     m_folderTree->setIndentation(16);
-    m_folderTree->setRootIsDecorated(true);   // 显示展开/折叠箭头
+    m_folderTree->setRootIsDecorated(true);
     m_folderTree->setAnimated(true);
     m_folderTree->setIconSize(QSize(16, 16));
     m_folderTree->setContextMenuPolicy(Qt::NoContextMenu);
     m_folderTree->viewport()->installEventFilter(this);
 
-    // 系统图标提供器
     QFileIconProvider iconProvider;
-
-    // 根节点 = exe 目录
     QString exeDir  = QCoreApplication::applicationDirPath();
     QString dirName = QDir(exeDir).dirName();
 
@@ -173,7 +559,6 @@ void AssetBrowserPanel::setupFolderTree()
     root->setIcon(0, iconProvider.icon(QFileIconProvider::Computer));
     root->setExpanded(true);
 
-    // Media 节点
     QTreeWidgetItem* mediaNode = buildTreeNode(root, mediaRoot(), true);
     Q_UNUSED(mediaNode)
 
@@ -194,10 +579,8 @@ QTreeWidgetItem* AssetBrowserPanel::buildTreeNode(
     auto* node = new QTreeWidgetItem(parent, { dir.dirName() });
     node->setData(0, Qt::UserRole, dirPath);
     node->setExpanded(expanded);
-    // 用系统文件夹图标
     node->setIcon(0, iconProvider.icon(QFileInfo(dirPath)));
 
-    // 只递归子目录
     for (const QFileInfo& fi :
          dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name))
     {
@@ -206,9 +589,10 @@ QTreeWidgetItem* AssetBrowserPanel::buildTreeNode(
     return node;
 }
 
-// ── eventFilter：右键按下立即弹菜单，不依赖 customContextMenuRequested ──
+// ── eventFilter：右键菜单 + OBJ 拖拽（从 fileList viewport 触发）────
 bool AssetBrowserPanel::eventFilter(QObject* obj, QEvent* event)
 {
+    // ── 右键菜单 ──────────────────────────────────────────────
     if (event->type() == QEvent::MouseButtonPress) {
         auto* me = static_cast<QMouseEvent*>(event);
         if (me->button() == Qt::RightButton) {
@@ -218,8 +602,107 @@ bool AssetBrowserPanel::eventFilter(QObject* obj, QEvent* event)
                 onFileListContextMenu(me->pos());
             return true;
         }
+        // 左键按下：记录拖拽起点（在 fileList viewport 内）
+        if (me->button() == Qt::LeftButton &&
+            obj == m_fileList->viewport())
+        {
+            m_dragStartPos = me->pos();
+            m_dragPending  = true;
+            // 不 return true，让 QTableWidget 正常处理选中
+        }
     }
+
+    // ── OBJ 拖拽：在 fileList viewport 的 MouseMove 里发起 ───
+    if (event->type() == QEvent::MouseMove &&
+        obj == m_fileList->viewport() &&
+        m_dragPending)
+    {
+        auto* me = static_cast<QMouseEvent*>(event);
+        if (!(me->buttons() & Qt::LeftButton)) {
+            m_dragPending = false;
+            return QWidget::eventFilter(obj, event);
+        }
+        if ((me->pos() - m_dragStartPos).manhattanLength()
+                < QApplication::startDragDistance())
+            return QWidget::eventFilter(obj, event);
+
+        // 取当前选中行（此时 QTableWidget 已处理过 Press，选中已更新）
+        auto selected = m_fileList->selectedItems();
+        if (selected.isEmpty()) { m_dragPending = false; return QWidget::eventFilter(obj, event); }
+
+        int row = selected.first()->row();
+        auto* nameItem = m_fileList->item(row, 0);
+        if (!nameItem) { m_dragPending = false; return QWidget::eventFilter(obj, event); }
+
+        QString path = nameItem->data(Qt::UserRole).toString();
+        bool isObj = path.endsWith(".obj", Qt::CaseInsensitive);
+        bool isFbx = path.endsWith(".fbx", Qt::CaseInsensitive);
+
+        if (!isObj && !isFbx) {
+            m_dragPending = false;
+            return QWidget::eventFilter(obj, event);
+        }
+
+        m_dragPending = false;
+
+        // 构造 MimeData
+        QDrag*     drag = new QDrag(m_fileList);
+        QMimeData* mime = new QMimeData;
+        if (isObj)
+        {
+            mime->setData("application/x-obj-asset", path.toUtf8());
+            mime->setData("application/x-primitive",
+                QByteArray("OBJ:" + path.toUtf8()));
+        }
+        else if (isFbx)
+        {
+            mime->setData("application/x-fbx-asset", path.toUtf8());
+            mime->setData("application/x-primitive",
+                QByteArray("FBX:" + path.toUtf8()));
+        }
+        drag->setMimeData(mime);
+
+        // 拖拽缩略图
+        QPixmap pm(48, 48);
+        pm.fill(QColor(40, 80, 140, 200));
+        QPainter painter(&pm);
+        painter.setPen(Qt::white);
+        painter.setFont(QFont("Arial", 8));
+        painter.drawText(pm.rect(), Qt::AlignCenter, isObj ? "OBJ" : "FBX");
+        painter.end();
+        drag->setPixmap(pm);
+        drag->setHotSpot(QPoint(24, 24));
+
+        emit logMessage(
+            tr("[AssetBrowser] 开始拖拽 %1: %2")
+            .arg(isObj ? "OBJ" : "FBX")
+            .arg(QFileInfo(path).fileName()),
+            0);
+
+        drag->exec(Qt::CopyAction);
+        return true;   // 已处理，不再传递
+    }
+
+    // ── 鼠标释放：重置拖拽标志 ───────────────────────────────
+    if (event->type() == QEvent::MouseButtonRelease &&
+        obj == m_fileList->viewport())
+    {
+        m_dragPending = false;
+    }
+
     return QWidget::eventFilter(obj, event);
+}
+
+// ── 鼠标按下 / 移动：拖拽逻辑已迁移至 eventFilter ─────────────
+void AssetBrowserPanel::mousePressEvent(QMouseEvent* e)
+{
+    QWidget::mousePressEvent(e);
+}
+
+// ── 鼠标移动：拖拽逻辑已迁移至 eventFilter ─────────────────────
+void AssetBrowserPanel::mouseMoveEvent(QMouseEvent* e)
+{
+    QWidget::mouseMoveEvent(e);
 }
 
 // ── 构建右侧文件表格 ──────────────────────────────────────────
@@ -247,6 +730,10 @@ void AssetBrowserPanel::setupFileList()
     m_fileList->setContextMenuPolicy(Qt::NoContextMenu);
     m_fileList->viewport()->installEventFilter(this);
 
+    // 禁用 Qt 内置拖拽，改由 eventFilter 统一处理 OBJ 拖拽
+    m_fileList->setDragEnabled(false);
+    m_fileList->setDragDropMode(QAbstractItemView::NoDragDrop);
+
     connect(m_fileList, &QTableWidget::itemClicked,
             this, &AssetBrowserPanel::onFileClicked);
     connect(m_fileList, &QTableWidget::itemDoubleClicked,
@@ -261,10 +748,8 @@ void AssetBrowserPanel::populateFileList(const QString& dirPath,
     QDir dir(dirPath);
     QFileIconProvider iconProvider;
 
-    // 先列子目录
     QFileInfoList entries =
         dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
-    // 再列文件
     entries += dir.entryInfoList(QDir::Files, QDir::Name);
 
     for (const QFileInfo& fi : entries) {
@@ -277,7 +762,7 @@ void AssetBrowserPanel::populateFileList(const QString& dirPath,
 
         QString typeName = fi.isDir()
             ? tr("[文件夹]")
-            : fi.suffix().isEmpty() ? tr("文件") : fi.suffix();
+            : fi.suffix().isEmpty() ? tr("文件") : fi.suffix().toUpper();
 
         QString sizeStr;
         if (fi.isFile()) {
@@ -287,16 +772,19 @@ void AssetBrowserPanel::populateFileList(const QString& dirPath,
                     : QString("%1 MB").arg(sz/(1024*1024));
         }
 
-        QString dateStr = fi.lastModified()
-                              .toString("yyyy/MM/dd HH:mm");
+        QString dateStr = fi.lastModified().toString("yyyy/MM/dd HH:mm");
 
         auto* nameItem = new QTableWidgetItem(fi.fileName());
         nameItem->setData(Qt::UserRole, fi.absoluteFilePath());
-        // 使用系统图标
         nameItem->setIcon(iconProvider.icon(fi));
-        // 目录用浅蓝色区分
         if (fi.isDir())
             nameItem->setForeground(QColor("#6cb6ff"));
+        // OBJ 文件用特殊高亮色
+        else if (fi.suffix().compare("obj", Qt::CaseInsensitive) == 0)
+            nameItem->setForeground(QColor("#e8b930"));
+        // FBX 文件用另一种高亮色
+        else if (fi.suffix().compare("fbx", Qt::CaseInsensitive) == 0)
+            nameItem->setForeground(QColor("#569cd6"));
 
         m_fileList->setItem(row, 0, nameItem);
         m_fileList->setItem(row, 1, new QTableWidgetItem(typeName));
@@ -314,11 +802,9 @@ void AssetBrowserPanel::onFolderSelected(QTreeWidgetItem* cur,
     if (path.isEmpty()) return;
 
     m_currentDir = path;
-
     QString rel = QDir(QCoreApplication::applicationDirPath())
                       .relativeFilePath(path);
     m_pathLabel->setText(rel.replace("/", " / "));
-
     populateFileList(path, m_searchBar->text());
     emit logMessage(tr("[AssetBrowser] 浏览目录: %1").arg(path), 0);
 }
@@ -340,7 +826,6 @@ void AssetBrowserPanel::onFileClicked(QTableWidgetItem* item)
     }
 }
 
-// 双击进入目录
 void AssetBrowserPanel::onFileDoubleClicked(QTableWidgetItem* item)
 {
     if (!item || item->column() != 0) return;
@@ -355,17 +840,100 @@ void AssetBrowserPanel::onFileDoubleClicked(QTableWidgetItem* item)
     }
 }
 
+// ── 文件 导入 ─────────────────────────────────────────────────
+void AssetBrowserPanel::importObjFile()
+{
+    // 弹出文件选择框，只允许 OBJ
+    QStringList files = QFileDialog::getOpenFileNames(
+        this,
+        tr("导入 OBJ 模型"),
+        QDir::homePath(),
+        tr("OBJ 模型 (*.obj);;所有文件 (*)"));
+
+    if (files.isEmpty()) return;
+
+    // 确保目标子目录 models 存在
+    QString modelsDir = m_currentDir;   // 导入到当前浏览目录
+    int importedCount = 0;
+
+    for (const QString& src : files) {
+        QFileInfo fi(src);
+        QString dest = modelsDir + "/" + fi.fileName();
+
+        // 同名则自动重命名
+        if (QFileInfo::exists(dest)) {
+            QString base = fi.completeBaseName();
+            QString ext  = ".obj";
+            int n = 1;
+            do { dest = modelsDir + "/" + base + QString("_%1").arg(n++) + ext; }
+            while (QFileInfo::exists(dest));
+        }
+
+        if (QFile::copy(src, dest)) {
+            ++importedCount;
+            emit logMessage(tr("[AssetBrowser] 导入 OBJ: %1").arg(dest), 0);
+        } else {
+            emit logMessage(tr("[AssetBrowser] 导入失败: %1").arg(src), 2);
+        }
+    }
+
+    if (importedCount > 0) {
+        populateFileList(m_currentDir, m_searchBar->text());
+        refreshTreeNode(m_currentDir);
+        emit logMessage(tr("[AssetBrowser] 共导入 %1 个 OBJ 文件").arg(importedCount), 0);
+    }
+}
+void AssetBrowserPanel::importFbxFile()
+{
+    // 弹出文件选择框，只允许 fbx
+    QStringList files = QFileDialog::getOpenFileNames(
+        this,
+        tr("导入 fbx 模型"),
+        QDir::homePath(),
+        tr("FBX 模型 (*.fbx);;所有文件 (*)"));
+
+    if (files.isEmpty()) return;
+
+    // 确保目标子目录 models 存在
+    QString modelsDir = m_currentDir;   // 导入到当前浏览目录
+    int importedCount = 0;
+
+    for (const QString& src : files) {
+        QFileInfo fi(src);
+        QString dest = modelsDir + "/" + fi.fileName();
+
+        // 同名则自动重命名
+        if (QFileInfo::exists(dest)) {
+            QString base = fi.completeBaseName();
+            QString ext = ".fbx";
+            int n = 1;
+            do { dest = modelsDir + "/" + base + QString("_%1").arg(n++) + ext; } while (QFileInfo::exists(dest));
+        }
+
+        if (QFile::copy(src, dest)) {
+            ++importedCount;
+            emit logMessage(tr("[AssetBrowser] 导入 FBX: %1").arg(dest), 0);
+        }
+        else {
+            emit logMessage(tr("[AssetBrowser] 导入失败: %1").arg(src), 2);
+        }
+    }
+
+    if (importedCount > 0) {
+        populateFileList(m_currentDir, m_searchBar->text());
+        refreshTreeNode(m_currentDir);
+        emit logMessage(tr("[AssetBrowser] 共导入 %1 个 FBX 文件").arg(importedCount), 0);
+    }
+}
 // ── 右侧文件列表右键菜单 ──────────────────────────────────────
 void AssetBrowserPanel::onFileListContextMenu(const QPoint& pos)
 {
-    // 优先取鼠标下那一行（任意列都行），其次用当前选中行
     QString selectedPath;
     QTableWidgetItem* hitItem = m_fileList->itemAt(pos);
     int row = -1;
     if (hitItem) {
         row = hitItem->row();
     } else {
-        // 点在行间空白时，用当前选中行
         auto selected = m_fileList->selectedItems();
         if (!selected.isEmpty())
             row = selected.first()->row();
@@ -374,13 +942,21 @@ void AssetBrowserPanel::onFileListContextMenu(const QPoint& pos)
         auto* nameItem = m_fileList->item(row, 0);
         if (nameItem) {
             selectedPath = nameItem->data(Qt::UserRole).toString();
-            // 同步选中高亮
             m_fileList->selectRow(row);
         }
     }
 
     QMenu menu(this);
     menu.setObjectName("contextMenu");
+
+    // ── 导入 OBJ（总是显示，无需选中项）─────────────────────
+    QAction* actImport = menu.addAction(tr("📥  导入 OBJ 模型..."));
+    QAction* actImportFBX = menu.addAction(tr("📥  导入 FBX 模型..."));
+    actImport->setObjectName("importAction");
+    actImportFBX->setObjectName("importFBXAction");
+    connect(actImport, &QAction::triggered, this, &AssetBrowserPanel::importObjFile);
+    connect(actImportFBX, &QAction::triggered, this, &AssetBrowserPanel::importFbxFile);
+    menu.addSeparator();
 
     // 有选中项时才显示文件操作
     if (!selectedPath.isEmpty()) {
@@ -395,8 +971,7 @@ void AssetBrowserPanel::onFileListContextMenu(const QPoint& pos)
             QFileInfo fi(selectedPath);
             bool ok;
             QString newName = QInputDialog::getText(
-                this, tr("重命名"),
-                tr("新名称:"),
+                this, tr("重命名"), tr("新名称:"),
                 QLineEdit::Normal, fi.fileName(), &ok);
             if (!ok || newName.isEmpty() || newName == fi.fileName()) return;
             QString newPath = fi.dir().filePath(newName);
@@ -413,14 +988,14 @@ void AssetBrowserPanel::onFileListContextMenu(const QPoint& pos)
         });
 
         connect(actCopy, &QAction::triggered, this, [this, selectedPath]() {
-            m_clipboardPath = selectedPath;
+            m_clipboardPath  = selectedPath;
             m_clipboardIsCut = false;
             emit logMessage(tr("[AssetBrowser] 已复制: %1")
                 .arg(QFileInfo(selectedPath).fileName()), 0);
         });
 
         connect(actCut, &QAction::triggered, this, [this, selectedPath]() {
-            m_clipboardPath = selectedPath;
+            m_clipboardPath  = selectedPath;
             m_clipboardIsCut = true;
             emit logMessage(tr("[AssetBrowser] 已剪切: %1")
                 .arg(QFileInfo(selectedPath).fileName()), 1);
@@ -452,7 +1027,7 @@ void AssetBrowserPanel::onFileListContextMenu(const QPoint& pos)
         });
     }
 
-    // 粘贴总是可用（如果剪贴板有内容）
+    // 粘贴
     if (!m_clipboardPath.isEmpty()) {
         QAction* actPaste = menu.addAction(tr("粘贴"));
         connect(actPaste, &QAction::triggered, this, &AssetBrowserPanel::filePaste);
@@ -462,7 +1037,6 @@ void AssetBrowserPanel::onFileListContextMenu(const QPoint& pos)
     QAction* actNewFolder = menu.addAction(tr("新建文件夹"));
     connect(actNewFolder, &QAction::triggered, this, &AssetBrowserPanel::fileNewFolder);
 
-    // 应用暗色样式
     menu.setStyleSheet(R"(
         QMenu {
             background: #2d2d2d;
@@ -478,6 +1052,10 @@ void AssetBrowserPanel::onFileListContextMenu(const QPoint& pos)
             background: #094771;
             color: #ffffff;
         }
+        QMenu::item#importAction {
+            color: #e8b930;
+            font-weight: bold;
+        }
         QMenu::separator {
             height: 1px;
             background: #3f3f46;
@@ -491,11 +1069,10 @@ void AssetBrowserPanel::onFileListContextMenu(const QPoint& pos)
 // ── 左侧目录树右键菜单 ────────────────────────────────────────
 void AssetBrowserPanel::onFolderTreeContextMenu(const QPoint& pos)
 {
-    // indexAt 比 itemAt 更可靠，能准确命中当前行
     QModelIndex idx = m_folderTree->indexAt(pos);
     QTreeWidgetItem* item = idx.isValid()
         ? m_folderTree->itemFromIndex(idx)
-        : m_folderTree->currentItem();   // 点空白时降级到当前选中项
+        : m_folderTree->currentItem();
     if (!item) return;
     QString dirPath = item->data(0, Qt::UserRole).toString();
     if (dirPath.isEmpty()) return;
@@ -507,12 +1084,7 @@ void AssetBrowserPanel::onFolderTreeContextMenu(const QPoint& pos)
     menu.addSeparator();
     QAction* actDelete = menu.addAction(tr("删除文件夹"));
 
-    // 用持久化索引避免 menu.exec() 期间指针失效
-    //QPersistentModelIndex persistIdx = m_folderTree->indexFromItem(item);
-
-    connect(actRename, &QAction::triggered, this, [this, /*persistIdx*/item, dirPath]() {
-        //QTreeWidgetItem* it = m_folderTree->itemFromIndex(persistIdx);
-        //if (!it) return;
+    connect(actRename, &QAction::triggered, this, [this, item, dirPath]() {
         QFileInfo fi(dirPath);
         bool ok;
         QString newName = QInputDialog::getText(
@@ -536,9 +1108,7 @@ void AssetBrowserPanel::onFolderTreeContextMenu(const QPoint& pos)
         }
     });
 
-    connect(actNewFolder, &QAction::triggered, this, [this, /*persistIdx*/item, dirPath]() {
-        //QTreeWidgetItem* it = m_folderTree->itemFromIndex(persistIdx);
-        //if (!it) return;
+    connect(actNewFolder, &QAction::triggered, this, [this, item, dirPath]() {
         bool ok;
         QString name = QInputDialog::getText(
             this, tr("新建文件夹"), tr("文件夹名称:"),
@@ -558,12 +1128,9 @@ void AssetBrowserPanel::onFolderTreeContextMenu(const QPoint& pos)
         }
     });
 
-    connect(actDelete, &QAction::triggered, this, [this, /*persistIdx*/item, dirPath]() {
-        //QTreeWidgetItem* it = m_folderTree->itemFromIndex(persistIdx);
-        //if (!it) return;
+    connect(actDelete, &QAction::triggered, this, [this, item, dirPath]() {
         if (!item) return;
         QFileInfo fi(dirPath);
-
         QMessageBox msgBox(this);
         msgBox.setWindowTitle(tr("确认删除"));
         msgBox.setText(tr("确定要删除文件夹 \"%1\" 及其所有内容吗？").arg(fi.fileName()));
@@ -573,20 +1140,16 @@ void AssetBrowserPanel::onFolderTreeContextMenu(const QPoint& pos)
             emit logMessage(tr("[AssetBrowser] 取消删除文件夹: %1").arg(fi.fileName()), 0);
             return;
         }
-
         if (QDir(dirPath).removeRecursively()) {
             QTreeWidgetItem* parentItem = item->parent();
             QString parentPath = parentItem
                 ? parentItem->data(0, Qt::UserRole).toString()
                 : mediaRoot();
-
             if (parentItem)
                 parentItem->removeChild(item);
             else
                 delete item;
-
             emit logMessage(tr("[AssetBrowser] 已删除文件夹: %1").arg(dirPath), 1);
-
             if (m_currentDir == dirPath || m_currentDir.startsWith(dirPath + "/")) {
                 m_currentDir = parentPath;
                 QString rel = QDir(QCoreApplication::applicationDirPath())
@@ -625,7 +1188,7 @@ void AssetBrowserPanel::fileCopy()
     int row = item->row();
     auto* nameItem = m_fileList->item(row, 0);
     if (nameItem) {
-        m_clipboardPath = nameItem->data(Qt::UserRole).toString();
+        m_clipboardPath  = nameItem->data(Qt::UserRole).toString();
         m_clipboardIsCut = false;
     }
 }
@@ -643,8 +1206,6 @@ void AssetBrowserPanel::filePaste()
     if (!fi.exists()) { m_clipboardPath.clear(); return; }
 
     QString dest = m_currentDir + "/" + fi.fileName();
-
-    // 避免同名覆盖
     if (QFileInfo::exists(dest)) {
         QString base = fi.completeBaseName();
         QString ext  = fi.suffix().isEmpty() ? "" : "." + fi.suffix();
@@ -655,7 +1216,6 @@ void AssetBrowserPanel::filePaste()
 
     bool ok = false;
     if (fi.isDir()) {
-        // 目录：递归复制（Qt 无内置，用 QDir）
         std::function<bool(const QString&, const QString&)> copyDir;
         copyDir = [&](const QString& src, const QString& dst) -> bool {
             QDir().mkpath(dst);
@@ -668,12 +1228,10 @@ void AssetBrowserPanel::filePaste()
             return true;
         };
         ok = copyDir(m_clipboardPath, dest);
-        if (ok && m_clipboardIsCut)
-            QDir(m_clipboardPath).removeRecursively();
+        if (ok && m_clipboardIsCut) QDir(m_clipboardPath).removeRecursively();
     } else {
         ok = QFile::copy(m_clipboardPath, dest);
-        if (ok && m_clipboardIsCut)
-            QFile::remove(m_clipboardPath);
+        if (ok && m_clipboardIsCut) QFile::remove(m_clipboardPath);
     }
 
     if (ok) {
@@ -733,7 +1291,6 @@ void AssetBrowserPanel::fileDelete()
         emit logMessage(tr("[AssetBrowser] 取消删除: %1").arg(fi.fileName()), 0);
         return;
     }
-
     bool ok = fi.isDir()
         ? QDir(path).removeRecursively()
         : QFile::remove(path);
@@ -765,16 +1322,13 @@ void AssetBrowserPanel::fileNewFolder()
     }
 }
 
-// 刷新目录树中对应节点的子项
 void AssetBrowserPanel::refreshTreeNode(const QString& dirPath)
 {
     QFileIconProvider iconProvider;
-    // 找到对应节点
     QList<QTreeWidgetItem*> items = m_folderTree->findItems(
         QDir(dirPath).dirName(), Qt::MatchExactly | Qt::MatchRecursive);
     for (auto* it : items) {
         if (it->data(0, Qt::UserRole).toString() == dirPath) {
-            // 清除旧子节点，重建
             while (it->childCount()) delete it->takeChild(0);
             for (const QFileInfo& fi :
                  QDir(dirPath).entryInfoList(
@@ -846,13 +1400,6 @@ void AssetBrowserPanel::applyStyle()
         QTreeWidget#folderTree::branch:has-children:!has-siblings:closed,
         QTreeWidget#folderTree::branch:closed:has-children:has-siblings {
             border-image: none;
-            image: none;
-            color: #888888;
-        }
-        /* 展开/折叠指示符：用 Qt 内置箭头 */
-        QTreeWidget#folderTree::branch:has-children:!has-siblings:closed,
-        QTreeWidget#folderTree::branch:closed:has-children:has-siblings {
-            border-image: none;
             image: url(:/qt-project.org/styles/commonstyle/images/right-arrow.png);
         }
         QTreeWidget#folderTree::branch:open:has-children:!has-siblings,
@@ -915,7 +1462,7 @@ LogConsolePanel::LogConsolePanel(QWidget* parent)
     m_output->setReadOnly(true);
     m_output->setObjectName("logOutput");
     m_output->setAcceptRichText(true);
-    m_output->document()->setMaximumBlockCount(2000);  // 最多2000行，防内存膨胀
+    m_output->document()->setMaximumBlockCount(2000);
 
     m_clearBtn = new QPushButton(tr("清空"), this);
     m_clearBtn->setObjectName("logClearBtn");
@@ -937,7 +1484,6 @@ LogConsolePanel::LogConsolePanel(QWidget* parent)
 
     applyStyle();
 
-    // 写几条示例日志
     appendMessage(tr("[INFO]  Level 'content/levels/basic.level' loaded."), 0);
     appendMessage(tr("[INFO]  Engine initialized.  OpenGL 4.6"), 0);
 }
@@ -946,9 +1492,7 @@ void LogConsolePanel::appendMessage(const QString& msg, int level)
 {
     static const char* colors[] = { "#cccccc", "#e8b930", "#f44747" };
     const char* color = (level >= 0 && level <= 2) ? colors[level] : colors[0];
-
     QString timestamp = QTime::currentTime().toString("HH:mm:ss");
-
     QTextCursor cursor(m_output->document());
     cursor.movePosition(QTextCursor::End);
     if (!m_output->document()->isEmpty())
@@ -958,9 +1502,6 @@ void LogConsolePanel::appendMessage(const QString& msg, int level)
                 "&nbsp;<span style='color:%2;font-size:12px;'>%3</span>")
             .arg(timestamp, color, msg.toHtmlEscaped())
     );
-
-    // 把 view cursor 也移到末尾——控件隐藏时也有效
-    // 等控件显示后 ensureCursorVisible 会正确滚动
     m_output->moveCursor(QTextCursor::End);
 }
 
@@ -1010,14 +1551,15 @@ void LogConsolePanel::applyStyle()
 
 
 // ═══════════════════════════════════════════════════════════════
-//  AssetPreviewPanel
+//  AssetPreviewPanel  —  图片/OBJ 双模式预览
 // ═══════════════════════════════════════════════════════════════
 AssetPreviewPanel::AssetPreviewPanel(QWidget* parent)
     : QWidget(parent)
 {
-    setFixedWidth(220);   // 和截图右侧预览区宽度一致
+    // 不再 setFixedWidth，让 BottomPanel 的 rightWidget 控制宽度
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
-    m_noSelLabel = new QLabel(tr("No previewable asset selected"), this);
+    m_noSelLabel = new QLabel(tr("No previewable\nasset selected"), this);
     m_noSelLabel->setObjectName("noSelLabel");
     m_noSelLabel->setAlignment(Qt::AlignCenter);
     m_noSelLabel->setWordWrap(true);
@@ -1026,22 +1568,34 @@ AssetPreviewPanel::AssetPreviewPanel(QWidget* parent)
     m_previewLabel->setObjectName("previewLabel");
     m_previewLabel->setAlignment(Qt::AlignCenter);
     m_previewLabel->setScaledContents(false);
+    m_previewLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     m_previewLabel->setVisible(false);
 
     m_infoLabel = new QLabel(this);
     m_infoLabel->setObjectName("infoLabel");
     m_infoLabel->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
     m_infoLabel->setWordWrap(true);
+    m_infoLabel->setFixedHeight(48);
     m_infoLabel->setVisible(false);
+
+    // OBJ 3D 预览：占满可用高度（伸展填充）
+    m_objPreview = new ObjPreviewWidget(this);
+    m_objPreview->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    m_objPreview->setMinimumHeight(120);
+    m_objPreview->setVisible(false);
 
     auto* vlay = new QVBoxLayout(this);
     vlay->setContentsMargins(4, 4, 4, 4);
     vlay->setSpacing(4);
-    vlay->addStretch();
-    vlay->addWidget(m_noSelLabel, 0, Qt::AlignCenter);
-    vlay->addWidget(m_previewLabel, 1, Qt::AlignCenter);
-    vlay->addWidget(m_infoLabel);
-    vlay->addStretch();
+    // noSelLabel 居中占满
+    vlay->addStretch(1);
+    vlay->addWidget(m_noSelLabel,  0, Qt::AlignCenter);
+    // 图片预览拉伸填满
+    vlay->addWidget(m_previewLabel, 1);
+    // OBJ 预览拉伸填满（stretch=1 与 previewLabel 互斥，同时只显示其一）
+    vlay->addWidget(m_objPreview,  1);
+    vlay->addWidget(m_infoLabel,   0);
+    vlay->addStretch(1);
     setLayout(vlay);
 
     applyStyle();
@@ -1053,23 +1607,90 @@ void AssetPreviewPanel::previewAsset(const QString& path)
         m_noSelLabel->setVisible(true);
         m_previewLabel->setVisible(false);
         m_infoLabel->setVisible(false);
+        m_objPreview->clearMesh();
+        m_objPreview->setVisible(false);
         return;
     }
 
-    // 尝试作为图片加载
+    QFileInfo fi(path);
+
+    // ── OBJ 文件 → 3D 预览 ──────────────────────────────────
+    if (fi.suffix().compare("obj", Qt::CaseInsensitive) == 0) {
+        m_noSelLabel->setVisible(false);
+        m_previewLabel->setVisible(false);
+        m_objPreview->setVisible(true);
+
+        ObjMesh mesh = ObjMesh::load(path);
+        if (mesh.valid) {
+            m_objPreview->loadMesh(mesh);
+            qint64 sz = fi.size();
+            QString sizeStr = sz < 1024 ? QString("%1 B").arg(sz)
+                            : sz < 1024*1024 ? QString("%1 KB").arg(sz/1024)
+                            : QString("%1 MB").arg(sz/(1024*1024));
+            int triCount = (int)mesh.indices.size() / 3;
+            m_infoLabel->setText(
+                QString("%1\n%2 三角面\n%3")
+                    .arg(fi.fileName())
+                    .arg(triCount)
+                    .arg(sizeStr));
+            m_infoLabel->setVisible(true);
+        } else {
+            m_objPreview->clearMesh();
+            m_infoLabel->setText(tr("OBJ 解析失败\n%1").arg(fi.fileName()));
+            m_infoLabel->setVisible(true);
+        }
+        return;
+    }
+    // ── FBX 文件 → 3D 预览 ──────────────────────────────────
+    if (fi.suffix().compare("fbx", Qt::CaseInsensitive) == 0) {
+        m_noSelLabel->setVisible(false);
+        m_previewLabel->setVisible(false);
+        m_objPreview->setVisible(true);
+
+        ObjMesh mesh = ObjMesh::load(path);
+        if (mesh.valid) {
+            m_objPreview->loadMesh(mesh);
+            qint64 sz = fi.size();
+            QString sizeStr = sz < 1024 ? QString("%1 B").arg(sz)
+                : sz < 1024 * 1024 ? QString("%1 KB").arg(sz / 1024)
+                : QString("%1 MB").arg(sz / (1024 * 1024));
+            int triCount = (int)mesh.indices.size() / 3;
+            m_infoLabel->setText(
+                QString("%1\n%2 三角面\n%3")
+                .arg(fi.fileName())
+                .arg(triCount)
+                .arg(sizeStr));
+            m_infoLabel->setVisible(true);
+        }
+        else {
+            m_objPreview->clearMesh();
+            m_infoLabel->setText(tr("FBX 解析失败\n%1").arg(fi.fileName()));
+            m_infoLabel->setVisible(true);
+        }
+        return;
+    }
+
+    // ── 图片文件 ─────────────────────────────────────────────
+    m_objPreview->clearMesh();
+    m_objPreview->setVisible(false);
+
     QPixmap px(path);
     if (!px.isNull()) {
-        QPixmap scaled = px.scaled(200, 150, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        // 动态按面板实际可用区域缩放（扣掉 infoLabel 固定高度和边距）
+        int availW = qMax(width()  - 8,  80);
+        int availH = qMax(height() - 60, 60);
+        QPixmap scaled = px.scaled(availW, availH,
+                                   Qt::KeepAspectRatio, Qt::SmoothTransformation);
         m_previewLabel->setPixmap(scaled);
         m_previewLabel->setVisible(true);
         m_infoLabel->setText(QString("%1\n%2 x %3")
-            .arg(QFileInfo(path).fileName())
+            .arg(fi.fileName())
             .arg(px.width()).arg(px.height()));
         m_infoLabel->setVisible(true);
         m_noSelLabel->setVisible(false);
     } else {
-        // 非图片资产，显示文件名
-        m_noSelLabel->setText(QFileInfo(path).fileName());
+        // 其他不可预览资产
+        m_noSelLabel->setText(fi.fileName());
         m_noSelLabel->setVisible(true);
         m_previewLabel->setVisible(false);
         m_infoLabel->setVisible(false);
@@ -1101,14 +1722,12 @@ void AssetPreviewPanel::applyStyle()
 BottomPanel::BottomPanel(QWidget* parent)
     : QWidget(parent)
 {
-    setFixedHeight(220);    // 与截图底部面板高度一致，可在 YGmax 里调整
+    setFixedHeight(220);
 
-    // ── 子面板 ─────────────────────────────────────────────────
     m_assetBrowser = new AssetBrowserPanel(this);
     m_logConsole   = new LogConsolePanel(this);
     m_assetPreview = new AssetPreviewPanel(this);
 
-    // ── 左侧：TabBar + StackedWidget ───────────────────────────
     m_tabBar = new QTabBar(this);
     m_tabBar->setObjectName("bottomTabBar");
     m_tabBar->setExpanding(false);
@@ -1123,7 +1742,7 @@ BottomPanel::BottomPanel(QWidget* parent)
             m_stack, &QStackedWidget::setCurrentIndex);
 
     connect(m_tabBar, &QTabBar::currentChanged, this, [this](int idx) {
-        if (idx == 1)   // Log Console tab
+        if (idx == 1)
             QTimer::singleShot(0, this, [this]() {
                 m_logConsole->findChild<QTextEdit*>()->ensureCursorVisible();
             });
@@ -1137,7 +1756,6 @@ BottomPanel::BottomPanel(QWidget* parent)
     leftVlay->addWidget(m_stack, 1);
     leftWidget->setLayout(leftVlay);
 
-    // ── 右侧预览面板标题栏 ──────────────────────────────────────
     auto* previewHeader = new QLabel(tr("Asset Preview"), this);
     previewHeader->setObjectName("previewHeader");
     previewHeader->setFixedHeight(24);
@@ -1151,9 +1769,8 @@ BottomPanel::BottomPanel(QWidget* parent)
     rightVlay->addWidget(previewHeader);
     rightVlay->addWidget(m_assetPreview, 1);
     rightWidget->setLayout(rightVlay);
-    rightWidget->setFixedWidth(220);
+    rightWidget->setFixedWidth(260);
 
-    // ── 左右用 Splitter 拼合 ──────────────────────────────────
     m_splitter = new QSplitter(Qt::Horizontal, this);
     m_splitter->setHandleWidth(1);
     m_splitter->addWidget(leftWidget);
@@ -1167,17 +1784,12 @@ BottomPanel::BottomPanel(QWidget* parent)
     mainLay->addWidget(m_splitter, 1);
     setLayout(mainLay);
 
-    // Asset Browser → Asset Preview 信号联通
     connect(m_assetBrowser, &AssetBrowserPanel::assetSelected,
             m_assetPreview, &AssetPreviewPanel::previewAsset);
-
-    // Asset Browser → Log Console 操作日志
     connect(m_assetBrowser, &AssetBrowserPanel::logMessage,
             m_logConsole,   &LogConsolePanel::appendMessage);
 
-    // connect 建立后补发初始化日志
     m_assetBrowser->initLog();
-
     applyStyle();
 }
 

@@ -140,6 +140,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <Image Include="ico\direction_arrow.png" />
     <Image Include="ico\f96x96.png" />
     <Image Include="ico\play96x96.png" />
     <Image Include="ico\Select.ico" />
