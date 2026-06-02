@@ -26,11 +26,17 @@
 #include <functional>
 #include <cmath>
 
+#include "ufbx.h"
+
 // ════════════════════════════════════════════════════════════════
 //  ObjMesh  —  微型 OBJ 解析器（支持 v / vn / f，多边形三角化）
 // ════════════════════════════════════════════════════════════════
 ObjMesh ObjMesh::load(const QString& path)
 {
+    // 按扩展名分派：FBX 走 ufbx，其余按 OBJ 文本解析
+    if (path.endsWith(".fbx", Qt::CaseInsensitive))
+        return loadFbx(path);
+
     ObjMesh out;
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
@@ -119,6 +125,101 @@ ObjMesh ObjMesh::load(const QString& path)
                 verts[base+5] = fn.z();
             }
         }
+    }
+
+    out.bboxMin  = bmin;
+    out.bboxMax  = bmax;
+    out.filePath = path;
+    out.valid    = true;
+    return out;
+}
+
+// ════════════════════════════════════════════════════════════════
+//  ObjMesh::loadFbx  —  基于 ufbx 的 FBX 解析（位置 + 法线）
+//  - 三角化所有面，烘焙 node 的 geometry_to_world 变换（含实例化）
+//  - 输出与 OBJ 解析器一致的交错格式：pos(3) + normal(3)
+// ════════════════════════════════════════════════════════════════
+ObjMesh ObjMesh::loadFbx(const QString& path)
+{
+    ObjMesh out;
+
+    ufbx_load_opts opts = {};
+    opts.generate_missing_normals = true;   // 无法线时自动生成
+    opts.target_axes              = ufbx_axes_right_handed_y_up;
+    opts.target_unit_meters       = 1.0f;
+
+    ufbx_error  err;
+    ufbx_scene* scene =
+        ufbx_load_file(path.toUtf8().constData(), &opts, &err);
+    if (!scene) {
+        // 透传 ufbx 的可读错误（如 "Unsupported version" / "File not found"）
+        out.error = (err.description.length > 0)
+                  ? QString::fromUtf8(err.description.data,
+                                      (int)err.description.length)
+                  : QObject::tr("未知错误");
+        return out;   // valid 默认 false
+    }
+
+    std::vector<float>&    verts = out.vertices;
+    std::vector<uint32_t>& idx   = out.indices;
+
+    QVector3D bmin( 1e9f, 1e9f, 1e9f);
+    QVector3D bmax(-1e9f,-1e9f,-1e9f);
+    auto updateBB = [&](const QVector3D& p) {
+        bmin.setX(std::min(bmin.x(), p.x()));
+        bmin.setY(std::min(bmin.y(), p.y()));
+        bmin.setZ(std::min(bmin.z(), p.z()));
+        bmax.setX(std::max(bmax.x(), p.x()));
+        bmax.setY(std::max(bmax.y(), p.y()));
+        bmax.setZ(std::max(bmax.z(), p.z()));
+    };
+
+    // 遍历所有节点：每个携带网格的节点都把几何烘焙到世界坐标
+    for (size_t ni = 0; ni < scene->nodes.count; ++ni) {
+        ufbx_node* node = scene->nodes.data[ni];
+        if (!node || !node->mesh) continue;
+
+        ufbx_mesh*   mesh   = node->mesh;
+        ufbx_matrix  toWorld = node->geometry_to_world;
+        ufbx_matrix  toWorldN = ufbx_matrix_for_normals(&toWorld);
+
+        // 三角化缓冲：max_face_triangles * 3 始终够用
+        std::vector<uint32_t> tri(mesh->max_face_triangles * 3);
+
+        for (size_t fi = 0; fi < mesh->faces.count; ++fi) {
+            ufbx_face face = mesh->faces.data[fi];
+            uint32_t numTris =
+                ufbx_triangulate_face(tri.data(), tri.size(), mesh, face);
+
+            for (uint32_t k = 0; k < numTris * 3; ++k) {
+                uint32_t ix = tri[k];
+
+                ufbx_vec3 p = ufbx_get_vertex_vec3(&mesh->vertex_position, ix);
+                ufbx_vec3 n = mesh->vertex_normal.exists
+                            ? ufbx_get_vertex_vec3(&mesh->vertex_normal, ix)
+                            : ufbx_vec3{ 0.0, 1.0, 0.0 };
+
+                ufbx_vec3 wp = ufbx_transform_position(&toWorld, p);
+                ufbx_vec3 wn = ufbx_transform_direction(&toWorldN, n);
+
+                QVector3D qp((float)wp.x, (float)wp.y, (float)wp.z);
+                QVector3D qn((float)wn.x, (float)wn.y, (float)wn.z);
+                if (qn.lengthSquared() > 1e-12f) qn.normalize();
+                else                             qn = QVector3D(0, 1, 0);
+
+                updateBB(qp);
+                idx.push_back((uint32_t)verts.size() / 6);
+                verts.insert(verts.end(), { qp.x(), qp.y(), qp.z(),
+                                            qn.x(), qn.y(), qn.z() });
+            }
+        }
+    }
+
+    ufbx_free_scene(scene);
+
+    if (verts.empty()) {
+        out.error = QObject::tr("文件中没有可用的网格几何");
+        return out;
     }
 
     out.bboxMin  = bmin;
@@ -1664,8 +1765,15 @@ void AssetPreviewPanel::previewAsset(const QString& path)
         }
         else {
             m_objPreview->clearMesh();
-            m_infoLabel->setText(tr("FBX 解析失败\n%1").arg(fi.fileName()));
+            QString reason = mesh.error.isEmpty()
+                           ? tr("未知错误") : mesh.error;
+            m_infoLabel->setText(
+                tr("FBX 解析失败\n%1\n原因：%2")
+                .arg(fi.fileName(), reason));
             m_infoLabel->setVisible(true);
+            emit logMessage(
+                tr("[AssetPreview] FBX 解析失败 %1：%2")
+                .arg(fi.fileName(), reason), 2);
         }
         return;
     }
@@ -1787,6 +1895,8 @@ BottomPanel::BottomPanel(QWidget* parent)
     connect(m_assetBrowser, &AssetBrowserPanel::assetSelected,
             m_assetPreview, &AssetPreviewPanel::previewAsset);
     connect(m_assetBrowser, &AssetBrowserPanel::logMessage,
+            m_logConsole,   &LogConsolePanel::appendMessage);
+    connect(m_assetPreview, &AssetPreviewPanel::logMessage,
             m_logConsole,   &LogConsolePanel::appendMessage);
 
     m_assetBrowser->initLog();

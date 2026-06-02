@@ -26,6 +26,17 @@
     <Filter Include="ico">
       <UniqueIdentifier>{2c63a23b-1f30-4420-a1e1-f6cea62ef89d}</UniqueIdentifier>
     </Filter>
+    <Filter Include="third_party\ufbx">
+      <UniqueIdentifier>{a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="third_party\ufbx\ufbx.c">
+      <Filter>third_party\ufbx</Filter>
+    </ClCompile>
+    <ClInclude Include="third_party\ufbx\ufbx.h">
+      <Filter>third_party\ufbx</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <QtRcc Include="YGmax.qrc">

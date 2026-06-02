@@ -145,11 +145,15 @@ struct ObjMesh {
     std::vector<uint32_t> indices;
     QString               filePath;
     bool                  valid = false;
+    QString               error;     // 解析失败时的可读原因（FBX 来自 ufbx）
 
     // 归一化包围盒，供预览居中
     QVector3D bboxMin, bboxMax;
 
+    // 按扩展名分派：.obj → 文本解析器，.fbx → ufbx 解析器
     static ObjMesh load(const QString& path);
+    // FBX 解析（基于 ufbx），失败返回 valid==false
+    static ObjMesh loadFbx(const QString& path);
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -224,6 +228,9 @@ public:
 
 public slots:
     void previewAsset(const QString& path);
+
+signals:
+    void logMessage(const QString& msg, int level = 0);
 
 private:
     void applyStyle();

@@ -1053,7 +1053,8 @@ void Viewport3D::showContextMenu(const QPoint& pos)
 void Viewport3D::dragEnterEvent(QDragEnterEvent* e)
 {
     if (e->mimeData()->hasFormat("application/x-primitive") ||
-        e->mimeData()->hasFormat("application/x-obj-asset"))
+        e->mimeData()->hasFormat("application/x-obj-asset") ||
+        e->mimeData()->hasFormat("application/x-fbx-asset"))
         e->acceptProposedAction();
     else
         e->ignore();
@@ -1063,7 +1064,8 @@ void Viewport3D::dragEnterEvent(QDragEnterEvent* e)
 void Viewport3D::dragMoveEvent(QDragMoveEvent* e)
 {
     if (e->mimeData()->hasFormat("application/x-primitive") ||
-        e->mimeData()->hasFormat("application/x-obj-asset"))
+        e->mimeData()->hasFormat("application/x-obj-asset") ||
+        e->mimeData()->hasFormat("application/x-fbx-asset"))
         e->acceptProposedAction();
     else
         e->ignore();
@@ -1107,6 +1109,21 @@ void Viewport3D::dropEvent(QDropEvent* e)
         return;
     }
 
+    // ── FBX 资产拖入（与 OBJ 共用 addObjMesh：load() 按扩展名分派）──
+    if (e->mimeData()->hasFormat("application/x-fbx-asset")) {
+        QString fbxPath = QString::fromUtf8(
+            e->mimeData()->data("application/x-fbx-asset"));
+        QVector3D worldPos = screenToWorld(e->position());
+
+        static int s_fbxCounter = 1;
+        QString baseName = QFileInfo(fbxPath).completeBaseName();
+        QString uniqueName = baseName + "_" + QString::number(s_fbxCounter++);
+
+        addObjMesh(uniqueName, fbxPath, worldPos);
+        e->acceptProposedAction();
+        return;
+    }
+
     // ── 内置图元拖入（原有逻辑）────────────────────────────────
     if (!e->mimeData()->hasFormat("application/x-primitive")) {
         e->ignore();
@@ -1116,8 +1133,8 @@ void Viewport3D::dropEvent(QDropEvent* e)
     QString type = QString::fromUtf8(
         e->mimeData()->data("application/x-primitive"));
 
-    // 过滤掉 OBJ 携带的 primitive mime（"OBJ:path" 格式）
-    if (type.startsWith("OBJ:")) {
+    // 过滤掉 OBJ / FBX 携带的 primitive mime（"OBJ:path" / "FBX:path" 格式）
+    if (type.startsWith("OBJ:") || type.startsWith("FBX:")) {
         e->ignore();
         return;
     }
