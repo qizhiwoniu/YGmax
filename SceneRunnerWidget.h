@@ -17,6 +17,7 @@
 #include <QKeyEvent>
 #include <QTimer>
 #include <QElapsedTimer>
+#include <QPainter>
 #include <vector>
 #include <memory>
 
@@ -48,7 +49,10 @@ struct RunnerGPU
     QOpenGLBuffer            ebo { QOpenGLBuffer::IndexBuffer  };
     int indexCount = 0;
 };
-
+// ───────────────────────────────────────────────────────────────
+//  触屏方向按钮方向枚举
+// ───────────────────────────────────────────────────────────────
+enum class DPadDir { Up, Down, Left, Right };
 // ───────────────────────────────────────────────────────────────
 //  SceneRunnerWidget
 // ───────────────────────────────────────────────────────────────
@@ -79,12 +83,20 @@ protected:
     void mouseReleaseEvent(QMouseEvent* e) override;
     void wheelEvent       (QWheelEvent* e) override;
     void keyPressEvent    (QKeyEvent*   e) override;
-
+    void keyReleaseEvent  (QKeyEvent*   e) override;
 private:
     void initShaders();
     void uploadObjects();
     void renderObjects();
-    void renderHUD();
+    void renderHUD(QPainter& p);
+    void renderDPad(QPainter& p);
+
+    // ── 镜头键盘移动 ─────────────────────────────────────
+    void applyKeyboardMove();
+
+    // ── 触屏 D-Pad 辅助 ──────────────────────────────────
+    QRect   dpadButtonRect(DPadDir dir) const;
+    DPadDir hitTestDPad(const QPoint& p) const;
 
     QOpenGLShaderProgram m_shader;
 
@@ -100,6 +112,16 @@ private:
     bool   m_rotating = false;
     bool   m_panning  = false;
     bool   m_showHUD  = false;   // G 键切换显示
+    bool   m_showDPad = true;
+
+    QSet<int> m_heldKeys;
+    int       m_dpadHeld = -1;
+
+    QPixmap m_arrowUp, m_arrowDown, m_arrowLeft, m_arrowRight;
+
+    static constexpr int kBtnSize = 52;
+    static constexpr int kBtnMargin = 16;
+    static constexpr int kBtnGap = 4;
 
     QTimer        m_renderTimer;
     QElapsedTimer m_fpsTimer;

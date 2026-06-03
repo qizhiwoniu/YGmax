@@ -4,7 +4,19 @@
 
 #include <QPainter>
 #include <QtMath>
-
+#include <QTransform>
+// ═══════════════════════════════════════════════════════════════
+//  辅助：生成带透明通道的旋转 pixmap
+// ═══════════════════════════════════════════════════════════════
+static QPixmap rotatedPixmap(const QPixmap& src, qreal angle)
+{
+    if (src.isNull()) return src;
+    QTransform t;
+    t.translate(src.width() / 2.0, src.height() / 2.0);
+    t.rotate(angle);
+    t.translate(-src.width() / 2.0, -src.height() / 2.0);
+    return src.transformed(t, Qt::SmoothTransformation);
+}
 // ═══════════════════════════════════════════════════════════════
 //  构造：只做 CPU 快照，绝不碰任何 GL 对象
 // ═══════════════════════════════════════════════════════════════
@@ -23,7 +35,19 @@ SceneRunnerWidget::SceneRunnerWidget(
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
-
+    // ── 加载方向箭头图标 ────────────────────────────────
+    QPixmap base(":/YGmax/ico/direction_arrow.png");
+    if (base.isNull()) base = QPixmap("direction_arrow.png");
+    if (base.isNull())
+        qWarning() << "[Runner] direction_arrow.png not found in resources or working dir";
+    const int iconSize = kBtnSize - 10;
+    if (!base.isNull())
+        base = base.scaled(iconSize, iconSize, Qt::KeepAspectRatio,
+            Qt::SmoothTransformation);
+    m_arrowUp = base;
+    m_arrowDown = rotatedPixmap(base, 180.0);
+    m_arrowLeft = rotatedPixmap(base, 270.0);
+    m_arrowRight = rotatedPixmap(base, 90.0);
     // ── CPU 快照（此时没有 GL context，不能创建任何 GL 对象）──
     for (const auto& o : src) {
         if (!o || o->vertices.empty() || o->indices.empty()) continue;
@@ -40,6 +64,7 @@ SceneRunnerWidget::SceneRunnerWidget(
     }
 
     connect(&m_renderTimer, &QTimer::timeout, this, [this]() {
+        applyKeyboardMove();   // 持续按键 / D-Pad 按住时每帧更新镜头
         ++m_frameCount;
         if (m_fpsTimer.elapsed() >= 1000) {
             m_fps = m_frameCount * 1000.f / (float)m_fpsTimer.restart();
@@ -157,7 +182,15 @@ void SceneRunnerWidget::paintGL()
 {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     renderObjects();
-    renderHUD();
+
+    // 统一在此创建唯一一个 QPainter，避免同帧多 QPainter 冲突
+    QPainter p(this);
+    p.setRenderHints(QPainter::TextAntialiasing |
+                     QPainter::Antialiasing     |
+                     QPainter::SmoothPixmapTransform);
+    if (m_showHUD)  renderHUD(p);
+    if (m_showDPad) renderDPad(p);
+    // p 在此析构，自动调用 end()
 }
 
 void SceneRunnerWidget::renderObjects()
@@ -207,15 +240,10 @@ void SceneRunnerWidget::renderObjects()
     m_shader.release();
 }
 
-void SceneRunnerWidget::renderHUD()
+void SceneRunnerWidget::renderHUD(QPainter& p)
 {
-    if (!m_showHUD) return;
-
     int visible = 0;
     for (auto& s : m_snapshots) if (s.visible) ++visible;
-
-    QPainter p(this);
-    p.setRenderHint(QPainter::TextAntialiasing);
 
     p.fillRect(0, 0, width(), 32, QColor(0, 0, 0, 120));
 
@@ -223,16 +251,102 @@ void SceneRunnerWidget::renderHUD()
     p.setFont(QFont("Segoe UI", 10));
     p.drawText(12, 20, QString("▶  运行中    物体: %1").arg(visible));
     p.drawText(width() - 80, 20, QString("FPS: %1").arg((int)m_fps));
+}
+// ═══════════════════════════════════════════════════════════════
+//  renderDPad
+// ═══════════════════════════════════════════════════════════════
+void SceneRunnerWidget::renderDPad(QPainter& p)
+{
+    const DPadDir   dirs[] = { DPadDir::Up, DPadDir::Down,
+                                   DPadDir::Left, DPadDir::Right };
+    const QPixmap* pixmaps[] = { &m_arrowUp, &m_arrowDown,
+                                   &m_arrowLeft, &m_arrowRight };
 
-    p.end();
+    for (int i = 0; i < 4; ++i) {
+        QRect rect = dpadButtonRect(dirs[i]);
+        bool  held = (m_dpadHeld == static_cast<int>(dirs[i]));
+
+        if (!pixmaps[i]->isNull()) {
+            int px = rect.x() + (rect.width() - pixmaps[i]->width()) / 2;
+            int py = rect.y() + (rect.height() - pixmaps[i]->height()) / 2;
+            p.setOpacity(held ? 1.0 : 0.55);
+            p.drawPixmap(px, py, *pixmaps[i]);
+            p.setOpacity(1.0);
+        }
+    }
 }
 
+QRect SceneRunnerWidget::dpadButtonRect(DPadDir dir) const
+{
+    const int step = kBtnSize + kBtnGap;
+    int cx = width() - kBtnMargin - kBtnSize - step;
+    int cy = height() - kBtnMargin - kBtnSize - step;
+
+    switch (dir) {
+    case DPadDir::Up:    return QRect(cx, cy - step, kBtnSize, kBtnSize);
+    case DPadDir::Down:  return QRect(cx, cy + step, kBtnSize, kBtnSize);
+    case DPadDir::Left:  return QRect(cx - step, cy, kBtnSize, kBtnSize);
+    case DPadDir::Right: return QRect(cx + step, cy, kBtnSize, kBtnSize);
+    }
+    return {};
+}
+
+DPadDir SceneRunnerWidget::hitTestDPad(const QPoint& pt) const
+{
+    const DPadDir dirs[] = { DPadDir::Up, DPadDir::Down,
+                              DPadDir::Left, DPadDir::Right };
+    for (DPadDir d : dirs)
+        if (dpadButtonRect(d).contains(pt)) return d;
+    return static_cast<DPadDir>(-1);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  键盘移动
+// ═══════════════════════════════════════════════════════════════
+void SceneRunnerWidget::applyKeyboardMove()
+{
+    bool goForward = m_heldKeys.contains(Qt::Key_W) || m_heldKeys.contains(Qt::Key_Up);
+    bool goBackward = m_heldKeys.contains(Qt::Key_S) || m_heldKeys.contains(Qt::Key_Down);
+    bool goLeft = m_heldKeys.contains(Qt::Key_A) || m_heldKeys.contains(Qt::Key_Left);
+    bool goRight = m_heldKeys.contains(Qt::Key_D) || m_heldKeys.contains(Qt::Key_Right);
+
+    if (m_dpadHeld == static_cast<int>(DPadDir::Up))    goForward = true;
+    if (m_dpadHeld == static_cast<int>(DPadDir::Down))  goBackward = true;
+    if (m_dpadHeld == static_cast<int>(DPadDir::Left))  goLeft = true;
+    if (m_dpadHeld == static_cast<int>(DPadDir::Right)) goRight = true;
+
+    if (!goForward && !goBackward && !goLeft && !goRight) return;
+
+    QMatrix4x4 view = m_camera.viewMatrix();
+    QVector3D right(view(0, 0), view(0, 1), view(0, 2));
+    QVector3D forward(-view(2, 0), -view(2, 1), -view(2, 2));
+    forward.setY(0); forward.normalize();
+    right.setY(0);   right.normalize();
+
+    float spd = m_camera.dist * 0.012f;
+    if (goForward)  m_camera.target += forward * spd;
+    if (goBackward) m_camera.target -= forward * spd;
+    if (goLeft)     m_camera.target -= right * spd;
+    if (goRight)    m_camera.target += right * spd;
+}
 // ═══════════════════════════════════════════════════════════════
 //  鼠标 / 键盘
 // ═══════════════════════════════════════════════════════════════
 void SceneRunnerWidget::mousePressEvent(QMouseEvent* e)
 {
     m_lastMouse = e->pos();
+
+    // D-Pad 图标点击（左键）
+    if (e->button() == Qt::LeftButton && m_showDPad) {
+        DPadDir d = hitTestDPad(e->pos());
+        if (static_cast<int>(d) != -1) {
+            m_dpadHeld = static_cast<int>(d);
+            applyKeyboardMove();
+            e->accept();
+            return;
+        }
+    }
+
     if (e->button() == Qt::MiddleButton) {
         bool shift = e->modifiers() & Qt::ShiftModifier;
         m_rotating = !shift;
@@ -263,6 +377,8 @@ void SceneRunnerWidget::mouseMoveEvent(QMouseEvent* e)
 
 void SceneRunnerWidget::mouseReleaseEvent(QMouseEvent* e)
 {
+    if (e->button() == Qt::LeftButton)
+        m_dpadHeld = -1;
     if (e->button() == Qt::MiddleButton)
         m_rotating = m_panning = false;
     e->accept();
@@ -277,10 +393,23 @@ void SceneRunnerWidget::wheelEvent(QWheelEvent* e)
 
 void SceneRunnerWidget::keyPressEvent(QKeyEvent* e)
 {
-    if (e->key() == Qt::Key_Escape)
+    if (e->key() == Qt::Key_Escape) {
         emit exitRequested();
-    else if (e->key() == Qt::Key_G)
+    } else if (e->key() == Qt::Key_G) {
         m_showHUD = !m_showHUD;
-    else
+    } else if (e->key() == Qt::Key_H) {
+        m_showDPad = !m_showDPad;
+    } else {
+        if (!e->isAutoRepeat())
+            m_heldKeys.insert(e->key());
+        applyKeyboardMove();
         QOpenGLWidget::keyPressEvent(e);
+    }
+}
+
+void SceneRunnerWidget::keyReleaseEvent(QKeyEvent* e)
+{
+    if (!e->isAutoRepeat())
+        m_heldKeys.remove(e->key());
+    QOpenGLWidget::keyReleaseEvent(e);
 }
